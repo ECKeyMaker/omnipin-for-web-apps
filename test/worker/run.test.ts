@@ -198,6 +198,86 @@ describe('runDeployment', () => {
     assert.strictEqual(JSON.parse(row().providers)[0].pin, 'pinned')
   })
 
+  it('repeats only the step that failed when retried', async () => {
+    let attempts = 0
+    let pins = 0
+    register('Up', async ({ cid }) => {
+      if (++attempts === 1) throw new Error('flaky')
+      return { cid }
+    })
+    register(
+      'Pin',
+      async ({ cid }) => {
+        pins++
+        return { cid }
+      },
+      'pin',
+    )
+
+    const retrying: Step = {
+      do: async (_, __, callback) => {
+        try {
+          return await callback()
+        } catch {
+          return callback()
+        }
+      },
+      sleep: async () => {},
+    }
+
+    await runDeployment({
+      id: '1',
+      env,
+      step: retrying,
+      config: config(['Up', 'Pin']),
+    })
+
+    assert.strictEqual(attempts, 2)
+    assert.strictEqual(pins, 1)
+    assert.strictEqual(row().status, 'published')
+  })
+
+  it('finishes from a replay once earlier steps are cached', async () => {
+    const cache = new Map<string, unknown>()
+    let uploads = 0
+    register('Up', async ({ cid }) => {
+      uploads++
+      return { cid }
+    })
+
+    // Cloudflare replays `run` after an eviction, returning finished steps
+    // from storage. The first pass dies partway through.
+    const replayable = (dieAt?: string): Step => ({
+      do: async (name, _, callback) => {
+        if (cache.has(name)) return cache.get(name) as never
+        if (name === dieAt) throw new Error('evicted')
+        const result = await callback()
+        cache.set(name, result)
+        return result
+      },
+      sleep: async () => {},
+    })
+
+    await assert.rejects(
+      runDeployment({
+        id: '1',
+        env,
+        step: replayable('finish'),
+        config: config(['Up']),
+      }),
+      /evicted/,
+    )
+    await runDeployment({
+      id: '1',
+      env,
+      step: replayable(),
+      config: config(['Up']),
+    })
+
+    assert.strictEqual(uploads, 1)
+    assert.strictEqual(row().status, 'published')
+  })
+
   it('gives each provider its own retryable step', async () => {
     register('Up', echo)
     register('Pin', echo, 'pin')

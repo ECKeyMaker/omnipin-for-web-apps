@@ -190,6 +190,7 @@ export const createDeployClient = ({
         if (current.status === 'published') onStage?.('published')
         return current
       }
+      signal?.throwIfAborted()
       await sleep(pollInterval, signal)
     }
   }

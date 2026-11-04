@@ -20,6 +20,8 @@ jobs:
           runtime: node@22
       - name: build
         run: pnpm build
+      - name: e2e
+        run: pnpm test:e2e
       - name: test
         run: pnpm test:report
         env:

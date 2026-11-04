@@ -99,6 +99,28 @@ describe('deploy', () => {
     assert.ok(liar.error instanceof DeployError)
   })
 
+  it('fails an upload that returns no CID', async () => {
+    await assert.rejects(
+      run([register('Silent', async () => ({}) as { cid: string })]),
+      AllProvidersFailedError,
+    )
+  })
+
+  it('fails a reply that is not a CID', async () => {
+    await assert.rejects(
+      run([register('Odd', async () => ({ cid: 'request-123' }))]),
+      AllProvidersFailedError,
+    )
+  })
+
+  it('lets a pin-only provider omit the CID', async () => {
+    const result = await run([
+      register('Up', echo),
+      register('Quiet', async () => ({}) as { cid: string }, 'pin'),
+    ])
+    assert.strictEqual(result.providers[1].status, 'deployed')
+  })
+
   it('fails the deploy when the only provider returns a different CID', async () => {
     await assert.rejects(
       run([register('Liar', async () => ({ cid: OTHER_CID }))]),

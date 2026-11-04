@@ -1,0 +1,25 @@
+{
+  "name": "my-app",
+  "main": "worker/index.ts",
+  "compatibility_date": "2026-06-01",
+  "limits": { "cpu_ms": 300000 },
+  "assets": {
+    "directory": "dist",
+    "not_found_handling": "single-page-application",
+    "binding": "ASSETS",
+    "run_worker_first": ["/api/*"]
+  },
+  "d1_databases": [
+    { "binding": "DB", "database_name": "my-app", "database_id": "REPLACE_ME" }
+  ],
+  "r2_buckets": [{ "binding": "CARS", "bucket_name": "my-app-cars" }],
+  "workflows": [
+    {
+      "name": "omnipin-deploy",
+      "binding": "DEPLOY_WORKFLOW",
+      "class_name": "DeployWorkflow"
+    }
+  ],
+  "triggers": { "crons": ["*/15 * * * *"] },
+  "vars": { "RPC_URL": "https://ethereum-sepolia-rpc.publicnode.com" }
+}

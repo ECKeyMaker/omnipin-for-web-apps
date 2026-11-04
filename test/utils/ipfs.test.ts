@@ -134,6 +134,29 @@ describe('ipfs utils', () => {
       )
     })
 
+    it('rejects a block no link reaches', async () => {
+      const { bytes, rootCID } = await site()
+      const extra = await packFiles([
+        { path: 'smuggled.bin', content: te.encode('free storage') },
+      ])
+      const reader = await CarReader.fromBytes(bytes)
+      const extraReader = await CarReader.fromBytes(extra.bytes)
+
+      const { writer, out } = CarWriter.create([rootCID])
+      const collected = Array.fromAsync(out)
+      for await (const block of reader.blocks()) await writer.put(block)
+      for await (const block of extraReader.blocks()) await writer.put(block)
+      await writer.close()
+
+      const smuggling = new Uint8Array(
+        await new Blob((await collected) as BlobPart[]).arrayBuffer(),
+      )
+      await assert.rejects(
+        verifyCAR(stream(smuggling), rootCID.toString()),
+        /unreachable block/,
+      )
+    })
+
     it('rejects something that is not a CAR', async () => {
       const { rootCID } = await site()
       await assert.rejects(
@@ -156,8 +179,9 @@ describe('ipfs utils', () => {
       assert.strictEqual(isSameCID(v1, other), false)
     })
 
-    it('does not treat a non-CID reply as a mismatch', () => {
-      assert.strictEqual(isSameCID('request-id-123', v1), true)
+    it('never matches something that is not a CID', () => {
+      assert.strictEqual(isSameCID('request-id-123', v1), false)
+      assert.strictEqual(isSameCID(v1, ''), false)
     })
   })
 

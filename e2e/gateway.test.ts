@@ -4,39 +4,33 @@ import { after, before, describe, it } from 'node:test'
 import { build } from 'esbuild'
 import { Miniflare } from 'miniflare'
 import { createDeployClient, packSite, prepareSite } from '../dist/client.js'
-import {
-  createSessionToken,
-  deriveAppSecret,
-  packFiles,
-} from '../dist/index.js'
+import { packFiles } from '../dist/index.js'
 
-// Runs the built packages on Cloudflare's real runtime, with real Workflows
-// and local D1 and R2. Only the outside world is stubbed: storage providers,
-// and the S3 endpoint R2 has no local version of.
+// Runs the example app's Worker on Cloudflare's real runtime, with real
+// Workflows and local D1 and R2. Only the outside world is stubbed: storage
+// providers, and the S3 endpoint R2 has no local version of.
 
-const ORIGIN = 'https://app.test'
-const API = 'http://gateway.test/api/deployments'
+const API = 'http://app.test/api/deployments'
 
 let mf: Miniflare
-let token: string
 let client: ReturnType<typeof createDeployClient>
 let uploadedBytes: number | undefined
 let expectedCid: string
-const failUploads = false
+let pinStatus = 'pinned'
+let workerSource: string
 const realFetch = globalThis.fetch
 
 const provider = async (request: Request) => {
   const { host } = new URL(request.url)
 
   if (host === 'uploads.pinata.cloud') {
-    if (failUploads) return new Response('down', { status: 500 })
     const form = await request.formData()
     uploadedBytes = (form.get('file') as File).size
     return Response.json({ data: { cid: expectedCid, id: 'x' } })
   }
 
   if (host === 'api.pinata.cloud')
-    return Response.json({ count: 1, results: [{ status: 'pinned' }] })
+    return Response.json({ count: 1, results: [{ status: pinStatus }] })
 
   return new Response('unexpected request', { status: 500 })
 }
@@ -50,13 +44,9 @@ const site = (body: string) =>
     },
   ]).files
 
-const authed = {
-  headers: () => ({ Authorization: `Bearer ${token}`, Origin: ORIGIN }),
-}
-
 before(async () => {
   const { outputFiles } = await build({
-    entryPoints: ['examples/cloudflare-gateway/src/index.ts'],
+    entryPoints: ['examples/cloudflare-app/worker/index.ts'],
     bundle: true,
     write: false,
     format: 'esm',
@@ -67,9 +57,11 @@ before(async () => {
     logLevel: 'error',
   })
 
+  workerSource = outputFiles[0].text
+
   mf = new Miniflare({
     modules: true,
-    script: outputFiles[0].text,
+    script: workerSource,
     compatibilityDate: '2026-06-01',
     d1Databases: { DB: 'db' },
     r2Buckets: { CARS: 'cars' },
@@ -77,7 +69,7 @@ before(async () => {
       DEPLOY_WORKFLOW: { name: 'omnipin-deploy', className: 'DeployWorkflow' },
     },
     bindings: {
-      MASTER_SECRET: 'master',
+      DEV_USER: 'alice',
       PINATA_TOKEN: 'token',
       R2_ACCOUNT_ID: 'account',
       R2_ACCESS_KEY_ID: 'id',
@@ -94,19 +86,6 @@ before(async () => {
     .map((s) => s.trim())
     .filter(Boolean)
   for (const statement of statements) await db.prepare(statement).run()
-  await db
-    .prepare(
-      `INSERT INTO connected_apps (id, name, origins, daily_bytes, user_daily_deploys)
-       VALUES ('app', 'App', '["${ORIGIN}"]', 1000000000, 50)`,
-    )
-    .run()
-
-  token = await createSessionToken({
-    appId: 'app',
-    userId: 'alice',
-    secret: await deriveAppSecret('master', 'app'),
-  })
-
   const bucket = await mf.getR2Bucket('CARS')
 
   globalThis.fetch = (async (url: string, init: RequestInit = {}) => {
@@ -114,7 +93,7 @@ before(async () => {
 
     if (target.includes('.r2.cloudflarestorage.com')) {
       const key = decodeURIComponent(new URL(target).pathname).replace(
-        '/omnipin-cars/',
+        '/my-app-cars/',
         '',
       )
       await bucket.put(
@@ -124,20 +103,13 @@ before(async () => {
       return new Response(null, { status: 200 })
     }
 
-    if (target.startsWith('http://gateway.test'))
-      return mf.dispatchFetch(target, {
-        ...init,
-        headers: { ...init.headers, Origin: ORIGIN },
-      } as never)
+    if (target.startsWith('http://app.test'))
+      return mf.dispatchFetch(target, init as never)
 
     return realFetch(url, init)
   }) as typeof fetch
 
-  client = createDeployClient({
-    apiBase: API,
-    getToken: () => token,
-    pollInterval: 100,
-  })
+  client = createDeployClient({ apiBase: API, pollInterval: 100 })
 })
 
 after(async () => {
@@ -200,7 +172,6 @@ describe('deploying through the gateway', () => {
 
     const made = await mf.dispatchFetch(API, {
       method: 'POST',
-      headers: authed.headers(),
       body: JSON.stringify({
         name: 'evil',
         cid: claimed.cid,
@@ -211,7 +182,7 @@ describe('deploying through the gateway', () => {
 
     const db = await mf.getD1Database('DB')
     const row = await db
-      .prepare('SELECT car_key FROM deployments WHERE id = ?1')
+      .prepare('SELECT car_key FROM omnipin_deployments WHERE id = ?1')
       .bind(id)
       .first<{ car_key: string }>()
     const bucket = await mf.getR2Bucket('CARS')
@@ -221,22 +192,74 @@ describe('deploying through the gateway', () => {
     )
 
     uploadedBytes = undefined
-    await mf.dispatchFetch(`${API}/${id}/start`, {
-      method: 'POST',
-      headers: authed.headers(),
-    })
+    await mf.dispatchFetch(`${API}/${id}/start`, { method: 'POST' })
 
     const result = await settled(id)
     assert.strictEqual(result.status, 'rejected')
     assert.strictEqual(uploadedBytes, undefined)
   })
 
-  it('refuses a request without a session', async () => {
-    const res = await mf.dispatchFetch(API, {
-      method: 'POST',
-      headers: { Origin: ORIGIN },
-      body: '{}',
+  it('leaves a site pending until a provider confirms it', {
+    timeout: 60_000,
+  }, async () => {
+    const files = site('<h1>slow pin</h1>')
+    expectedCid = (await packSite(files)).cid
+    pinStatus = 'queued'
+
+    // The workflow waits between checks, so follow it only as far as the
+    // upload to show it hasn't claimed success.
+    const { id } = (await (
+      await mf.dispatchFetch(API, {
+        method: 'POST',
+        body: JSON.stringify({
+          name: 'slow',
+          cid: expectedCid,
+          size: (await packSite(files)).size,
+        }),
+      })
+    ).json()) as { id: string }
+
+    const db = await mf.getD1Database('DB')
+    const row = await db
+      .prepare('SELECT car_key FROM omnipin_deployments WHERE id = ?1')
+      .bind(id)
+      .first<{ car_key: string }>()
+    const bucket = await mf.getR2Bucket('CARS')
+    await bucket.put(
+      row?.car_key as string,
+      new Uint8Array(await (await packSite(files)).car.arrayBuffer()),
+    )
+    await mf.dispatchFetch(`${API}/${id}/start`, { method: 'POST' })
+
+    await new Promise((resolve) => setTimeout(resolve, 1500))
+    assert.strictEqual((await client.status(id)).status, 'publishing')
+    pinStatus = 'pinned'
+  })
+
+  it('refuses anyone the app hasn’t signed in', async () => {
+    const locked = new Miniflare({
+      modules: true,
+      script: workerSource,
+      compatibilityDate: '2026-06-01',
+      d1Databases: { DB: 'locked' },
+      r2Buckets: { CARS: 'locked' },
+      workflows: {
+        DEPLOY_WORKFLOW: {
+          name: 'omnipin-deploy',
+          className: 'DeployWorkflow',
+        },
+      },
+      bindings: {
+        PINATA_TOKEN: 'token',
+        R2_ACCOUNT_ID: 'account',
+        R2_ACCESS_KEY_ID: 'id',
+        R2_SECRET_ACCESS_KEY: 'secret',
+        RPC_URL: 'https://rpc.test',
+      },
     })
+
+    const res = await locked.dispatchFetch(API, { method: 'POST', body: '{}' })
+    await locked.dispose()
     assert.strictEqual(res.status, 401)
   })
 })

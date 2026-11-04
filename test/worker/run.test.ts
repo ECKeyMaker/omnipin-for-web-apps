@@ -19,7 +19,7 @@ const register = (
   name: string,
   upload: UploadFunction,
   supported: SupportedMethods = 'both',
-  status?: () => Promise<{ pin: 'pinned' | 'queued' }>,
+  status?: () => Promise<{ pin: 'pinned' | 'queued' | 'failed' }>,
 ) => {
   const key = `${name.toUpperCase()}_TOKEN`
   PROVIDERS[key] = { name, upload, supported, protocol: 'ipfs', status }
@@ -27,6 +27,8 @@ const register = (
 }
 
 const echo: UploadFunction = async ({ cid }) => ({ cid, status: 'queued' })
+const pinned = async () => ({ pin: 'pinned' as const })
+const queued = async () => ({ pin: 'queued' as const })
 
 // Runs steps immediately, without Cloudflare's retry delays.
 const steps = () => {
@@ -51,7 +53,7 @@ const config = (
   extra: Partial<GatewayConfig<Env>> = {},
 ): GatewayConfig<Env> => ({
   basePath: '/d',
-  masterSecret: () => 'm',
+  authenticate: () => null,
   tokens: () =>
     new Map(providers.map((p) => [`${p.toUpperCase()}_TOKEN`, 'token'])),
   providers,
@@ -63,12 +65,14 @@ const config = (
   }),
   rpcUrl: () => 'https://rpc.example',
   chainId: 1,
-  limits: { maxCarBytes: 1, globalDailyBytes: 1, retentionDays: 1 },
+  limits: { maxCarBytes: 1 },
   ...extra,
 })
 
 const row = () =>
-  env.DB.sqlite.prepare("SELECT * FROM deployments WHERE id = '1'").get() as {
+  env.DB.sqlite
+    .prepare("SELECT * FROM omnipin_deployments WHERE id = '1'")
+    .get() as {
     status: string
     error: string | null
     providers: string
@@ -87,11 +91,9 @@ const run = (providers: string[], extra?: Partial<GatewayConfig<Env>>) => {
 beforeEach(() => {
   ;({ env } = createEnv())
   env.DB.sqlite.exec(`
-    INSERT INTO connected_apps (id, name, origins, daily_bytes, user_daily_deploys)
-    VALUES ('app', 'app', '[]', 1, 1);
-    INSERT INTO deployments
-      (id, app_id, user_id, name, cid, size, car_key, status, retention_until, created_at)
-    VALUES ('1', 'app', 'u', 'site', '${CID}', ${bytes.length}, '${car}', 'publishing', 0, 0);
+    INSERT INTO omnipin_deployments
+      (id, user_id, name, cid, size, car_key, status, created_at)
+    VALUES ('1', 'u', 'site', '${CID}', ${bytes.length}, '${car}', 'publishing', 0);
   `)
   env.CARS.objects.set(car, bytes)
 })
@@ -101,8 +103,8 @@ afterEach(() => {
 })
 
 describe('runDeployment', () => {
-  it('publishes and removes the temporary CAR', async () => {
-    register('Up', echo)
+  it('publishes a confirmed site and removes the temporary CAR', async () => {
+    register('Up', echo, 'both', pinned)
     await run(['Up'])
     assert.strictEqual(row().status, 'published')
     assert.strictEqual(env.CARS.objects.has(car), false)
@@ -143,7 +145,7 @@ describe('runDeployment', () => {
     register('Down', async () => {
       throw new Error('down')
     })
-    register('Up', echo)
+    register('Up', echo, 'both', pinned)
 
     await run(['Down', 'Up'])
 
@@ -164,7 +166,7 @@ describe('runDeployment', () => {
   })
 
   it('stays published when only a pin fails', async () => {
-    register('Up', echo)
+    register('Up', echo, 'both', pinned)
     register(
       'Pin',
       async () => {
@@ -202,10 +204,15 @@ describe('runDeployment', () => {
   it('repeats only the step that failed when retried', async () => {
     let attempts = 0
     let pins = 0
-    register('Up', async ({ cid }) => {
-      if (++attempts === 1) throw new Error('flaky')
-      return { cid }
-    })
+    register(
+      'Up',
+      async ({ cid }) => {
+        if (++attempts === 1) throw new Error('flaky')
+        return { cid }
+      },
+      'both',
+      pinned,
+    )
     register(
       'Pin',
       async ({ cid }) => {
@@ -241,10 +248,15 @@ describe('runDeployment', () => {
   it('finishes from a replay once earlier steps are cached', async () => {
     const cache = new Map<string, unknown>()
     let uploads = 0
-    register('Up', async ({ cid }) => {
-      uploads++
-      return { cid }
-    })
+    register(
+      'Up',
+      async ({ cid }) => {
+        uploads++
+        return { cid }
+      },
+      'both',
+      pinned,
+    )
 
     // Cloudflare replays `run` after an eviction, returning finished steps
     // from storage. The first pass dies partway through.
@@ -263,7 +275,7 @@ describe('runDeployment', () => {
       runDeployment({
         id: '1',
         env,
-        step: replayable('finish'),
+        step: replayable('complete'),
         config: config(['Up']),
       }),
       /evicted/,
@@ -277,6 +289,49 @@ describe('runDeployment', () => {
 
     assert.strictEqual(uploads, 1)
     assert.strictEqual(row().status, 'published')
+  })
+
+  it('does not publish what no provider has confirmed', async () => {
+    register('Up', echo, 'both', queued)
+
+    await run(['Up'])
+
+    assert.strictEqual(row().status, 'pending')
+    assert.strictEqual(env.CARS.objects.has(car), true)
+  })
+
+  it('stays pending when no provider can report a pin', async () => {
+    register('Up', echo)
+    await run(['Up'])
+    assert.strictEqual(row().status, 'pending')
+    assert.match(row().error ?? '', /can confirm/)
+  })
+
+  it('fails when every provider reports a failed pin', async () => {
+    register('Up', echo, 'both', async () => ({ pin: 'failed' as const }))
+    await run(['Up'])
+    assert.strictEqual(row().status, 'failed')
+    assert.strictEqual(env.CARS.objects.has(car), false)
+  })
+
+  it('holds DNSLink back until the site is confirmed', async () => {
+    env.DB.sqlite.exec(
+      "UPDATE omnipin_deployments SET dnslink = 'site.example.com' WHERE id = '1'",
+    )
+    const realFetch = globalThis.fetch
+    let dnsCalls = 0
+    globalThis.fetch = (async () => {
+      dnsCalls++
+      return Response.json({ result: [] })
+    }) as typeof fetch
+
+    register('Up', echo, 'both', queued)
+    await run(['Up'], {
+      dnslink: () => ({ apiKey: 'k', zoneId: 'z' }),
+    })
+    globalThis.fetch = realFetch
+
+    assert.strictEqual(dnsCalls, 0)
   })
 
   it('gives each provider its own retryable step', async () => {

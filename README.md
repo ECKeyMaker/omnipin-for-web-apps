@@ -1,7 +1,7 @@
 > [!NOTE]
-> **This is `omnipin-web-apps`, a fork of [Omnipin](https://github.com/omnipin/omnipin)** that makes deployment embeddable in web apps. See [Embedding in web apps](docs/docs/web-apps.md), [Operating public funding](docs/docs/public-funding.md) and the [security model](docs/docs/security.md).
+> **This is `omnipin-web-apps`, a fork of [Omnipin](https://github.com/omnipin/omnipin)** that lets a web app use the Omnipin toolset instead of the command line. See [Embedding in web apps](docs/docs/web-apps.md) and the [security model](docs/docs/security.md).
 >
-> The contracts are unaudited, and nothing has been tested against live providers, real wallets or a bundler. Don't put real funds behind it yet.
+> Nothing has been tested against live providers or real wallets yet.
 >
 > The rest of this README describes the original CLI, which is still included. It installs here as `omnipin-web-apps` rather than `omnipin`.
 

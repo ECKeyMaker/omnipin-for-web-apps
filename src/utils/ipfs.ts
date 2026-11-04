@@ -116,14 +116,13 @@ export const assertCID = (cid: string) => {
 
 /**
  * Whether two CID strings name the same content, whatever their version or
- * base. A provider's reply that isn't a CID can't be compared, so it doesn't
- * count as a mismatch.
+ * base. Anything that isn't a CID proves nothing, so it never matches.
  */
 export const isSameCID = (a: string, b: string): boolean => {
   try {
     return CID.parse(a).toV1().equals(CID.parse(b).toV1())
   } catch {
-    return true
+    return false
   }
 }
 
@@ -136,7 +135,7 @@ const sameBytes = (a: Uint8Array, b: Uint8Array) =>
  * on to ENS, so a server must run this before publishing an uploaded CAR.
  *
  * @throws {InvalidCARError} If the root is wrong, a block's bytes don't match
- *   its CID, or a linked block is missing.
+ *   its CID, a linked block is missing, or a block isn't part of the site.
  */
 export const verifyCAR = async (
   source: AsyncIterable<Uint8Array>,
@@ -176,4 +175,9 @@ export const verifyCAR = async (
 
   for (const cid of linked)
     if (!present.has(cid)) throw new InvalidCARError(`missing block ${cid}`)
+
+  // Unreachable blocks would be stored and paid for, without being in the site
+  // the CID describes.
+  for (const cid of present)
+    if (!linked.has(cid)) throw new InvalidCARError(`unreachable block ${cid}`)
 }

@@ -272,7 +272,11 @@ export const publishToProvider = async ({
   })
 
   // The CID goes on to ENS and DNSLink, so a provider that stored something
-  // else must not count as a success.
+  // else must not count as a success. The provider holding the bytes has to
+  // say what it stored: without that, nothing proves the upload worked.
+  if (first && !result.cid)
+    throw new DeployError(provider.name, 'upload returned no CID')
+
   if (result.cid && !isSameCID(result.cid, cid))
     throw new DeployError(
       provider.name,

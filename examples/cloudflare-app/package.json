@@ -1,5 +1,5 @@
 {
-  "name": "omnipin-connected-app-example",
+  "name": "omnipin-cloudflare-app-example",
   "private": true,
   "type": "module",
   "scripts": {
@@ -8,7 +8,7 @@
     "deploy": "vite build && wrangler deploy"
   },
   "dependencies": {
-    "omnipin-web-apps": "latest",
+    "omnipin-web-apps": "github:ECKeyMaker/omnipin-for-web-apps#COMMIT_SHA",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },

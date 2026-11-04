@@ -46,7 +46,7 @@ export const uploadOnLighthouse: UploadFunction = async ({
       throw new DeployError(providerName, message)
     }
 
-    return { cid: json.data?.Hash || cid }
+    return { cid: json.data?.Hash }
   }
 
   // Pin existing CID

@@ -50,6 +50,3 @@ proof*.txt
 
 .vitepress/dist
 cache
-contracts/out
-contracts/cache
-contracts/broadcast

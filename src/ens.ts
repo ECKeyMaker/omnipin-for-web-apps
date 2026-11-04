@@ -73,7 +73,7 @@ export const prepareEnsUpdate = async ({
 
 /**
  * Surface a revert (wrong resolver, no permission on the name) before anyone
- * signs or anything is sponsored.
+ * signs.
  */
 export const simulateEnsUpdate = (
   provider: Provider,

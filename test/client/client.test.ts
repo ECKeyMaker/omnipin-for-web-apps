@@ -3,6 +3,7 @@ import { afterEach, describe, it } from 'node:test'
 import {
   connectWallet,
   createDeployClient,
+  type DeployTimeoutError,
   type GatewayError,
 } from '../../src/client/index.js'
 
@@ -156,7 +157,7 @@ describe('updateEns through a Safe', () => {
         proposals.push(JSON.parse(init.body as string))
         return new Response('', { status: 201 })
       }
-      return Response.json({ call, chainId: 11155111, sponsored: false })
+      return Response.json({ call, chainId: 11155111 })
     })
     const w = safeWallet()
 
@@ -167,17 +168,15 @@ describe('updateEns through a Safe', () => {
     })
 
     assert.ok(result.queueUrl?.includes(safe))
-    assert.strictEqual(result.sponsored, false)
     assert.ok(w.methods.includes('eth_signTypedData_v4'))
     assert.ok(!w.methods.includes('eth_sendTransaction'))
-    assert.ok(!w.methods.includes('wallet_sendCalls'))
     assert.strictEqual(proposals.length, 1)
     assert.strictEqual(proposals[0].sender.toLowerCase(), account)
     assert.strictEqual(proposals[0].nonce, '7')
   })
 
   it('does not sign if the update would revert', async () => {
-    respond(() => Response.json({ call, chainId: 1, sponsored: false }))
+    respond(() => Response.json({ call, chainId: 1 }))
     const methods: string[] = []
     await assert.rejects(
       client().updateEns('1', {
@@ -196,11 +195,136 @@ describe('updateEns through a Safe', () => {
   })
 
   it('refuses a chain Safe support doesn’t cover', async () => {
-    respond(() => Response.json({ call, chainId: 10, sponsored: false }))
+    respond(() => Response.json({ call, chainId: 10 }))
     await assert.rejects(
       client().updateEns('1', { wallet: safeWallet(), account, safe }),
       /isn't supported/,
     )
+  })
+})
+
+describe('settling', () => {
+  for (const state of ['pending', 'expired', 'removed', 'rejected', 'failed'])
+    it(`stops polling at ${state}`, async () => {
+      let polls = 0
+      const respondTo = gateway([])
+      respond((url, init) => {
+        if (url.endsWith('/1')) polls++
+        return url.endsWith('/1')
+          ? Response.json({ ...published, status: state })
+          : respondTo(url, init)
+      })
+      const result = await client().deploy(site, { name: 'site' })
+      assert.strictEqual(result.status, state)
+      assert.strictEqual(polls, 1)
+    })
+
+  it('reports pending as its own stage, not as published', async () => {
+    respond(gateway([{ ...published, status: 'pending' }]))
+    const stages: string[] = []
+    await client().deploy(site, {
+      name: 'site',
+      onStage: (stage) => stages.push(stage),
+    })
+    assert.strictEqual(stages.at(-1), 'pending')
+    assert.ok(!stages.includes('published'))
+  })
+
+  it('times out instead of polling forever, keeping the id', async () => {
+    const respondTo = gateway([])
+    respond((url, init) =>
+      url.endsWith('/1')
+        ? Response.json({ ...published, status: 'publishing' })
+        : respondTo(url, init),
+    )
+    await assert.rejects(
+      createDeployClient({
+        apiBase: 'https://gateway.test',
+        pollInterval: 1,
+        timeout: 5,
+      }).deploy(site, { name: 'site' }),
+      (e: DeployTimeoutError) =>
+        e.name === 'DeployTimeoutError' && e.deploymentId === '1',
+    )
+  })
+})
+
+describe('publish', () => {
+  it('uploads an already-packed site without packing it again', async () => {
+    const bodies: unknown[] = []
+    const stages: string[] = []
+    const respondTo = gateway([])
+    respond((url, init) => {
+      if (url.endsWith('/') && init.method === 'POST')
+        bodies.push(JSON.parse(init.body as string))
+      if (url.includes('storage')) bodies.push(init.body)
+      return respondTo(url, init)
+    })
+
+    const c = client()
+    const packed = await c.pack(site)
+    await c.publish(packed, {
+      name: 'site',
+      onStage: (stage) => stages.push(stage),
+    })
+
+    assert.deepStrictEqual(bodies[0], {
+      name: 'site',
+      cid: packed.cid,
+      size: packed.size,
+    })
+    assert.strictEqual(bodies[1], packed.car)
+    assert.ok(!stages.includes('packing'))
+  })
+})
+
+describe('authentication', () => {
+  it('sends cookies by default, and no Authorization header', async () => {
+    let seen: RequestInit | undefined
+    respond((_, init) => {
+      seen = init
+      return Response.json(published)
+    })
+    await createDeployClient({ apiBase: '/api' }).status('1')
+    assert.strictEqual(seen?.credentials, 'same-origin')
+    assert.deepStrictEqual(seen?.headers, {})
+  })
+
+  it('sends a bearer token if the app provides one', async () => {
+    let seen: RequestInit | undefined
+    respond((_, init) => {
+      seen = init
+      return Response.json(published)
+    })
+    await client().status('1')
+    assert.deepStrictEqual(seen?.headers, { Authorization: 'Bearer token' })
+  })
+})
+
+describe('tools', () => {
+  it('calls the matching routes', async () => {
+    const seen: string[] = []
+    respond((url, init) => {
+      seen.push(
+        `${init.method ?? 'GET'} ${url.replace('https://gateway.test', '')}`,
+      )
+      return Response.json({ cid: 'x', providers: [] })
+    })
+    const c = client()
+    await c.pinStatus('cid')
+    await c.pin('cid')
+    await c.unpin('cid')
+    await c.updateDnsLink('cid', 'site.example.com')
+    await c.remove('1')
+    await c.recheck('1')
+    assert.deepStrictEqual(seen, [
+      'GET /pins/cid',
+      'POST /pins',
+      'POST /pins/cid/unpin',
+      'POST /dnslink',
+      'POST /1/remove',
+      'POST /1/recheck',
+    ])
   })
 })
 
@@ -276,77 +400,26 @@ describe('packing in a worker', () => {
 })
 
 describe('updateEns', () => {
-  const sponsoredPlan = {
-    call,
-    sponsored: true,
-    chainId: 1,
-    paymasterUrl: 'https://gateway.test/paymaster?token=t',
-  }
-
-  it('uses the paymaster when the wallet supports it', async () => {
-    respond(() => Response.json(sponsoredPlan))
-    const w = wallet({
-      wallet_getCapabilities: {
-        '0x1': { paymasterService: { supported: true } },
-      },
-      wallet_sendCalls: { id: 'bundle' },
-    })
-
-    const result = await client().updateEns('1', { wallet: w, account })
-
-    assert.deepStrictEqual(result, { sponsored: true, reference: 'bundle' })
-    const sent = w.calls.at(-1)?.params?.[0] as {
-      capabilities: { paymasterService: { url: string } }
-    }
-    assert.strictEqual(
-      sent.capabilities.paymasterService.url,
-      sponsoredPlan.paymasterUrl,
-    )
-  })
-
-  it('falls back to a normal transaction on older wallets', async () => {
-    respond(() => Response.json(sponsoredPlan))
-    const w = wallet({
-      wallet_getCapabilities: new Error('Method not supported'),
-      eth_sendTransaction: '0xhash',
-    })
+  it('has the wallet send it, and pay for it', async () => {
+    respond(() => Response.json({ call, chainId: 1 }))
+    const w = wallet({ eth_sendTransaction: '0xhash' })
     assert.deepStrictEqual(
       await client().updateEns('1', { wallet: w, account }),
-      { sponsored: false, reference: '0xhash' },
+      { reference: '0xhash' },
+    )
+    assert.deepStrictEqual(
+      w.calls.map((c) => c.method),
+      ['eth_sendTransaction'],
     )
   })
 
-  it('falls back when sponsorship is off for the chain', async () => {
-    respond(() => Response.json(sponsoredPlan))
-    const w = wallet({
-      wallet_getCapabilities: {
-        '0xa': { paymasterService: { supported: true } },
-      },
-      eth_sendTransaction: '0xhash',
-    })
-    const { sponsored } = await client().updateEns('1', { wallet: w, account })
-    assert.strictEqual(sponsored, false)
-  })
-
-  it('does not send anything if the user rejects the prompt', async () => {
-    respond(() => Response.json({ call, sponsored: false }))
+  it('surfaces a rejected prompt', async () => {
+    respond(() => Response.json({ call, chainId: 1 }))
     const w = wallet({ eth_sendTransaction: new Error('User rejected') })
     await assert.rejects(
       client().updateEns('1', { wallet: w, account }),
       /User rejected/,
     )
-  })
-
-  it('never falls back to paying when a sponsored send is rejected', async () => {
-    respond(() => Response.json(sponsoredPlan))
-    const w = wallet({
-      wallet_getCapabilities: {
-        '0x1': { paymasterService: { supported: true } },
-      },
-      wallet_sendCalls: new Error('User rejected'),
-    })
-    await assert.rejects(client().updateEns('1', { wallet: w, account }))
-    assert.ok(!w.calls.some((c) => c.method === 'eth_sendTransaction'))
   })
 })
 

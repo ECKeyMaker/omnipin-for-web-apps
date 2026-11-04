@@ -261,10 +261,6 @@ export default withMermaid({
             link: '/docs/web-apps',
           },
           {
-            text: 'Operating public funding',
-            link: '/docs/public-funding',
-          },
-          {
             text: 'Security model',
             link: '/docs/security',
           },

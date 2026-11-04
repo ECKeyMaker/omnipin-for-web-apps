@@ -7,14 +7,12 @@
 		"url": "git+https://github.com/ECKeyMaker/omnipin-for-web-apps.git"
 	},
 	"devDependencies": {
-		"@account-abstraction/contracts": "0.7.0",
 		"@biomejs/biome": "^2.4.7",
 		"@ipld/car": "^5.4.2",
 		"@ipld/dag-pb": "^4.1.7",
 		"@jsr/omnipin__foc": "^0.0.20",
 		"@multiformats/murmur3": "^2.2.5",
 		"@omnipin/foc": "npm:@jsr/omnipin__foc@0.0.20",
-		"@openzeppelin/contracts": "5.1.0",
 		"@rslib/core": "^0.23.2",
 		"@size-limit/file": "^12.0.1",
 		"@stauro/filebase-upload": "npm:@jsr/stauro__filebase-upload",
@@ -24,7 +22,6 @@
 		"@types/varint": "^6.0.3",
 		"esbuild": "^0.28.2",
 		"fflate": "^0.8.3",
-		"forge-std": "github:foundry-rs/forge-std#v1.9.7",
 		"hamt-sharding": "^3.0.8",
 		"interface-store": "^8.0.0",
 		"jsdom": "^30.1.3",
@@ -48,23 +45,22 @@
 	"bin": {
 		"omnipin-web-apps": "dist/cli.js"
 	},
-	"description": "Deploy static sites to IPFS from any web app, with gas and storage paid from a shared public pool",
+	"description": "Use the Omnipin toolset from your own web app: deploy sites to IPFS, pin, unpin, and update ENS and DNSLink",
 	"engineStrict": true,
 	"engines": {
 		"node": ">=22"
 	},
 	"files": [
-		"dist",
-		"contracts/src"
+		"dist"
 	],
 	"homepage": "https://github.com/ECKeyMaker/omnipin-for-web-apps",
 	"keywords": [
 		"ipfs",
 		"deploy",
 		"ens",
+		"dnslink",
 		"web3",
 		"cloudflare-workers",
-		"erc-4337",
 		"react"
 	],
 	"license": "MIT",
@@ -83,7 +79,6 @@
 		"test:report": "mkdir -p coverage && node --experimental-test-module-mocks --import ./test/register.ts --test --experimental-test-coverage --test-coverage-include='src/**' --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=coverage/lcov.info 'test/**/*.test.ts'",
 		"test:e2e": "pnpm build && node --import ./test/register.ts --test 'e2e/**/*.test.ts'",
 		"check:core": "node scripts/check-core.ts",
-		"test:contracts": "cd contracts && forge test",
 		"prepare": "rslib && cp src/worker/schema.sql dist/schema.sql"
 	},
 	"size-limit": [

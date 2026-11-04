@@ -157,6 +157,70 @@ describe('DeployPanel', () => {
     globalThis.fetch = previous
   })
 
+  it('shows pending as waiting, not as an error, and can check again', async () => {
+    const previous = globalThis.fetch
+    let settled = 'pending'
+    globalThis.fetch = (async (url: string, init: RequestInit = {}) => {
+      const target = String(url)
+      if (target.includes('storage')) return new Response(null, { status: 200 })
+      if (target.endsWith('/') && init.method === 'POST')
+        return Response.json(
+          {
+            id: '1',
+            uploadUrl: 'https://storage.test/put',
+            contentType: 'application/vnd.ipld.car',
+          },
+          { status: 201 },
+        )
+      if (target.endsWith('/start')) return Response.json({}, { status: 202 })
+      if (target.endsWith('/recheck')) settled = 'published'
+      return Response.json({
+        id: '1',
+        status: settled,
+        providers: [],
+        ens: null,
+        urls: { gateway: 'https://site.ipfs.dweb.link/' },
+        error: null,
+      })
+    }) as typeof fetch
+
+    await mount()
+    await act(async () =>
+      setInput(query<HTMLInputElement>('input[required]'), 'hello'),
+    )
+    await act(async () =>
+      selectFiles(query<HTMLInputElement>('input[data-kind=files]'), [
+        new File(['<h1>hi</h1>'], 'index.html'),
+      ]),
+    )
+    await act(async () => {
+      query('form').dispatchEvent(
+        new dom.window.Event('submit', { bubbles: true, cancelable: true }),
+      )
+      await new Promise((resolve) => setTimeout(resolve, 60))
+    })
+
+    assert.match(
+      query('[role=status]').textContent ?? '',
+      /Waiting for a provider/,
+    )
+    assert.strictEqual(query('[role=alert]'), null)
+    assert.strictEqual(query('[role=status] a'), null)
+
+    const again = Array.from(document.querySelectorAll('button')).find((b) =>
+      b.textContent?.includes('Check again'),
+    )
+    assert.ok(again)
+
+    await act(async () => {
+      again.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    })
+
+    assert.ok(query('[role=status] a'))
+    globalThis.fetch = previous
+  })
+
   it('offers a folder picker', async () => {
     await mount()
     assert.ok(query('input[data-kind=folder]').hasAttribute('webkitdirectory'))
@@ -166,10 +230,10 @@ describe('DeployPanel', () => {
     const previous = globalThis.fetch
     globalThis.fetch = (async (url: string, init: RequestInit = {}) => {
       const target = String(url)
-      if (target.endsWith('/sponsorship'))
+      if (target.endsWith('/ens/prepare'))
         return Response.json({
           call: { to: `0x${'cc'.repeat(20)}`, data: '0x12' },
-          sponsored: false,
+          chainId: 1,
         })
       if (target.endsWith('/ens/verify'))
         return Response.json({ confirmed: true })
@@ -241,10 +305,7 @@ describe('DeployPanel', () => {
       'eth_requestAccounts',
       'eth_sendTransaction',
     ])
-    assert.match(
-      query('[role=status]').textContent ?? '',
-      /ENS name updated.*paid by your wallet/,
-    )
+    assert.match(query('[role=status]').textContent ?? '', /ENS name updated/)
     globalThis.fetch = previous
   })
 })

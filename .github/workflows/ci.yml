@@ -2,7 +2,7 @@ name: Lint
 
 on:
   push:
-    branches: [main]
+    branches: [main, feat/web-embed]
   pull_request:
     branches: [main]
 
@@ -18,15 +18,7 @@ jobs:
         run: pnpm build
       - name: lint
         run: pnpm check
+      - name: types
+        run: pnpm types
       - name: check core bundle
         run: pnpm check:core
-  contracts:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: pnpm/setup@v3
-        with:
-          runtime: node@22
-      - uses: foundry-rs/foundry-toolchain@v1
-      - name: test contracts
-        run: pnpm test:contracts

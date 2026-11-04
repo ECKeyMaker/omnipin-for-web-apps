@@ -14,7 +14,7 @@ pnpm check           # Biome linter/formatter
 pnpm check:core      # After build: fail if Node built-ins reached dist/index.js
 pnpm test:report     # Run tests with coverage
 pnpm test            # Run all tests
-pnpm test:contracts  # Run Solidity tests (needs Foundry)
+pnpm test:e2e        # Build, then test the packages on workerd
 node --experimental-test-module-mocks --import ./test/register.ts --test path  # Run specific test file
 node --env-file=.env.local --experimental-test-module-mocks --import ./test/register.ts --test path  # With env vars
 ```
@@ -172,9 +172,8 @@ OMNIPIN_AIOZ_TOKEN=api_key:api_secret
 /test
   /providers      # Provider tests
   /utils          # Utility tests
-/contracts          # SponsorPaymaster, tests and deploy script (Foundry)
 /e2e                # Tests of the built packages (`pnpm test:e2e`)
-/examples           # Gateway and connected-app templates
+/examples           # App template
 dist/             # Build output
 ```
 
@@ -195,8 +194,8 @@ Tokens are parsed in `src/utils/env.ts`. The `OMNIPIN_` prefix is stripped.
 - Node-only code lives in `src/actions`, `src/cli.ts`, `src/utils/fs.ts` and `src/utils/pack-node.ts`
 - Providers that need Node are registered in `src/providers/node.ts`, not `src/constants.ts`
 - `src/client`, `src/react` and `src/worker` are the embeddable layers. `src/client` must never receive secrets
-- `src/worker` is the funding gateway. Never accept provider URLs, RPC URLs or tokens from a client
-- `SponsorPaymaster.getHash` and `paymasterHash` in `src/worker/paymaster.ts` must match; both pin the same vector in their tests
+- `src/worker` runs in the host app's Worker, and identifies users through its `authenticate` hook. Never accept provider URLs, RPC URLs or tokens from a client
+- `published` means a provider reported `pinned`. Anything less stays `pending`
 - `src/deploy.ts` reports through its return value and `onEvent`, never the terminal
 
 ### Documentation

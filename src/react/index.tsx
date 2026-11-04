@@ -23,9 +23,9 @@ export type UseDeployOptions = DeployClientOptions & { limits?: SiteLimits }
 type EnsState =
   | { step: 'idle' }
   | { step: 'signing' }
-  | { step: 'confirming'; sponsored: boolean }
-  | { step: 'confirmed'; sponsored: boolean }
-  | { step: 'pending'; sponsored: boolean }
+  | { step: 'confirming' }
+  | { step: 'confirmed' }
+  | { step: 'pending' }
   | { step: 'proposed'; queueUrl: string }
 
 type State = {
@@ -38,9 +38,21 @@ type State = {
 
 const idle: State = { stage: 'idle', ens: { step: 'idle' } }
 
+/** `pending` isn't an error: the site is uploaded and awaiting confirmation. */
+const settled = (deployment: DeploymentStatus): Partial<State> => {
+  const { status, error } = deployment
+  const ok = status === 'published' || status === 'pending'
+
+  return {
+    deployment,
+    stage: ok ? status : 'idle',
+    error: ok ? undefined : (error ?? `Deployment ${status}`),
+  }
+}
+
 /** Headless deploy state, for apps that bring their own interface. */
 export const useDeploy = ({ limits, ...options }: UseDeployOptions) => {
-  const { apiBase, appId } = options
+  const { apiBase } = options
   const latest = useRef(options)
   latest.current = options
 
@@ -49,10 +61,9 @@ export const useDeploy = ({ limits, ...options }: UseDeployOptions) => {
       createDeployClient({
         ...latest.current,
         apiBase,
-        appId,
-        getToken: () => latest.current.getToken(),
+        getToken: () => latest.current.getToken?.() ?? '',
       }),
-    [apiBase, appId],
+    [apiBase],
   )
 
   const [state, setState] = useState<State>(idle)
@@ -78,16 +89,7 @@ export const useDeploy = ({ limits, ...options }: UseDeployOptions) => {
           onProgress: (progress) => setState((s) => ({ ...s, progress })),
         })
 
-        const published = deployment.status === 'published'
-
-        setState((s) => ({
-          ...s,
-          deployment,
-          stage: published ? 'published' : 'idle',
-          error: published
-            ? undefined
-            : (deployment.error ?? `Deployment ${deployment.status}`),
-        }))
+        setState((s) => ({ ...s, ...settled(deployment) }))
         return deployment
       } catch (error) {
         if (!abort.signal.aborted)
@@ -107,9 +109,20 @@ export const useDeploy = ({ limits, ...options }: UseDeployOptions) => {
     setState(idle)
   }, [])
 
+  /** Ask providers again about a `pending` deployment. */
+  const recheck = useCallback(async () => {
+    const id = state.deployment?.id
+    if (!id) return
+    try {
+      const deployment = await client.recheck(id)
+      setState((s) => ({ ...s, ...settled(deployment) }))
+    } catch (error) {
+      setState((s) => ({ ...s, error: (error as Error).message }))
+    }
+  }, [client, state.deployment?.id])
+
   /**
-   * Point the deployment's ENS name at it. The public pool pays the gas when
-   * the wallet can use it.
+   * Point the deployment's ENS name at it. The user's wallet signs and pays.
    */
   const updateEns = useCallback(
     async (wallet: WalletProvider, { safe }: { safe?: Address } = {}) => {
@@ -120,7 +133,7 @@ export const useDeploy = ({ limits, ...options }: UseDeployOptions) => {
 
       try {
         const account = await connectWallet(wallet)
-        const { sponsored, queueUrl } = await client.updateEns(id, {
+        const { queueUrl } = await client.updateEns(id, {
           wallet,
           account,
           safe,
@@ -132,12 +145,12 @@ export const useDeploy = ({ limits, ...options }: UseDeployOptions) => {
           return
         }
 
-        setState((s) => ({ ...s, ens: { step: 'confirming', sponsored } }))
+        setState((s) => ({ ...s, ens: { step: 'confirming' } }))
 
         const confirmed = await client.confirmEns(id)
         setState((s) => ({
           ...s,
-          ens: { step: confirmed ? 'confirmed' : 'pending', sponsored },
+          ens: { step: confirmed ? 'confirmed' : 'pending' },
         }))
       } catch (error) {
         setState((s) => ({
@@ -150,13 +163,14 @@ export const useDeploy = ({ limits, ...options }: UseDeployOptions) => {
     [client, state.deployment?.id],
   )
 
-  return { ...state, client, deploy, cancel, updateEns }
+  return { ...state, client, deploy, cancel, recheck, updateEns }
 }
 
 const STAGE_LABELS: Record<DeployStage, string> = {
   packing: 'Packing your site…',
   uploading: 'Uploading…',
   publishing: 'Publishing to storage providers…',
+  pending: 'Uploaded. Waiting for a provider to confirm it holds your site.',
   published: 'Published',
 }
 
@@ -195,8 +209,17 @@ export const DeployPanel = ({
   onDeployed,
   ...options
 }: DeployPanelProps) => {
-  const { stage, progress, deployment, ens, error, deploy, cancel, updateEns } =
-    useDeploy(options)
+  const {
+    stage,
+    progress,
+    deployment,
+    ens,
+    error,
+    deploy,
+    cancel,
+    recheck,
+    updateEns,
+  } = useDeploy(options)
   const [files, setFiles] = useState<SiteFile[]>([])
   const [size, setSize] = useState(0)
   const [name, setName] = useState('')
@@ -356,14 +379,13 @@ export const DeployPanel = ({
             Open the Safe queue
           </a>
         )}
-        {ens.step === 'confirmed' && (
-          <p>
-            {ens.sponsored
-              ? 'Gas was paid by the public pool.'
-              : 'Gas was paid by your wallet.'}
-          </p>
-        )}
       </div>
+
+      {stage === 'pending' && (
+        <button type="button" onClick={recheck}>
+          Check again
+        </button>
+      )}
 
       {showEns &&
         (availableWallet ? (

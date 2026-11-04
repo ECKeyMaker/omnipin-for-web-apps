@@ -179,7 +179,7 @@ describe('MemoryBlockstore', () => {
       await bs.put(cid1, new TextEncoder().encode('all1'))
       await bs.put(cid2, new TextEncoder().encode('all2'))
 
-      const pairs: { cid: CID; bytes: AsyncIterable<Uint8Array> }[] = []
+      const pairs: { cid: CID }[] = []
       for await (const pair of bs.getAll()) {
         pairs.push(pair)
       }
@@ -224,7 +224,7 @@ describe('MemoryBlockstore', () => {
         () => {
           for (const _ of bs.get(makeCID('ignored') as unknown as CID, {
             signal: ac.signal,
-          })) {
+          }) as Generator<Uint8Array>) {
             // noop
           }
         },

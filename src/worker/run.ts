@@ -1,10 +1,16 @@
 import { PROVIDERS } from '../constants.js'
 import { pickUploader, publishToProvider, selectProviders } from '../deploy.js'
 import { InvalidCARError } from '../errors.js'
-import { updateDnsLink } from '../utils/dnslink.js'
 import { findEnvVarProviderName } from '../utils/env.js'
 import { verifyCAR } from '../utils/ipfs.js'
-import type { DeploymentRow } from './gateway.js'
+import {
+  checkableProviders,
+  completeDeployment,
+  type DeploymentRow,
+  loadRow,
+  type ProviderState,
+  pinStatuses,
+} from './deployments.js'
 import type { GatewayConfig, GatewayEnv } from './types.js'
 
 /** The slice of Cloudflare's `WorkflowStep` the run uses. */
@@ -27,13 +33,6 @@ const RETRIES = {
 
 const PIN_CHECKS = 10
 
-type ProviderState = {
-  name: string
-  status: 'deployed' | 'failed'
-  pin?: string
-  error?: string
-}
-
 /**
  * Publish one deployment. Each provider runs as its own step, so a retry
  * repeats only what failed and the CAR is never carried between steps.
@@ -55,18 +54,16 @@ export const runDeployment = async <E extends GatewayEnv>({
       .run()
 
   const deployment = await step.do('load', RETRIES, async () => {
-    const row = await env.DB.prepare('SELECT * FROM deployments WHERE id = ?1')
-      .bind(id)
-      .first<DeploymentRow>()
+    const row = await loadRow(env.DB, id)
     if (!row) throw new Error(`Deployment ${id} not found`)
     return row
   })
 
-  const finish = async (status: string, error: string | null = null) => {
-    await step.do('finish', RETRIES, async () => {
+  const close = async (status: string, error: string) => {
+    await step.do('close', RETRIES, async () => {
       await env.CARS.delete(deployment.car_key)
       await update(
-        'UPDATE deployments SET status = ?2, error = ?3 WHERE id = ?1',
+        'UPDATE omnipin_deployments SET status = ?2, error = ?3 WHERE id = ?1',
         id,
         status,
         error,
@@ -86,7 +83,7 @@ export const runDeployment = async <E extends GatewayEnv>({
     }
   })
 
-  if (!valid) return finish('rejected', 'CAR does not match its CID')
+  if (!valid) return close('rejected', 'CAR does not match its CID')
 
   const tokens = () => config.tokens(env)
   const providerNames = selectProviders(tokens(), config.providers).active.map(
@@ -140,73 +137,66 @@ export const runDeployment = async <E extends GatewayEnv>({
     if (await attempt(uploader.name, true)) uploaded.push(uploader.name)
   }
 
-  if (!uploaded.length) return finish('failed', 'No provider accepted the site')
+  if (!uploaded.length) return close('failed', 'No provider accepted the site')
 
   for (const { name } of remaining) await attempt(name, false)
 
   await step.do('record providers', RETRIES, async () => {
     await update(
-      'UPDATE deployments SET providers = ?2 WHERE id = ?1',
+      'UPDATE omnipin_deployments SET providers = ?2 WHERE id = ?1',
       id,
       JSON.stringify(states),
     )
   })
 
-  // Pins fetch asynchronously, so "published" means someone has confirmed
-  // holding the site, not just that a request was accepted.
-  const checkable = states.filter(
-    (s) => s.status === 'deployed' && byName(s.name).status,
-  )
+  // Providers accept a request long before they hold anything, and a launch
+  // can't be undone, so only a provider reporting `pinned` counts.
+  const checkable = checkableProviders(states)
+  let confirmed = false
+  let pins: (string | null)[] = []
 
   for (let check = 0; check < PIN_CHECKS && checkable.length; check++) {
-    const pins = await step.do(`pin status ${check}`, RETRIES, async () => {
-      const results = await Promise.allSettled(
-        checkable.map(({ name }) =>
-          byName(name).status?.({
-            cid: deployment.cid,
-            auth: { token: tokens().get(findEnvVarProviderName(name)) },
-            baseURL: tokens().get('SPEC_URL'),
-          }),
-        ),
-      )
-      return results.map((r) =>
-        r.status === 'fulfilled' ? (r.value?.pin ?? null) : null,
-      )
-    })
+    pins = await step.do(`pin status ${check}`, RETRIES, () =>
+      pinStatuses(env, config, deployment.cid, checkable),
+    )
 
-    for (const [i, pin] of pins.entries()) if (pin) checkable[i].pin = pin
+    for (const [i, pin] of pins.entries()) {
+      const state = states.find((s) => s.name === checkable[i])
+      if (state && pin) state.pin = pin
+    }
 
-    if (pins.some((pin) => pin === 'pinned')) break
+    confirmed = pins.includes('pinned')
+    if (confirmed || pins.every((pin) => pin === 'failed')) break
     await step.sleep(`pin wait ${check}`, '1 minute')
   }
 
   await step.do('record pins', RETRIES, async () => {
     await update(
-      'UPDATE deployments SET providers = ?2 WHERE id = ?1',
+      'UPDATE omnipin_deployments SET providers = ?2 WHERE id = ?1',
       id,
       JSON.stringify(states),
     )
   })
 
-  let dnsError: string | null = null
-
-  if (deployment.dnslink && config.dnslink) {
-    try {
-      await step.do('dnslink', RETRIES, async () => {
-        const { apiKey, zoneId } = config.dnslink?.(env) ?? {}
-        const { errors } = await updateDnsLink({
-          cid: deployment.cid,
-          name: deployment.dnslink as string,
-          apiKey: apiKey as string,
-          zoneId: zoneId as string,
-          verbose: false,
-        })
-        if (errors?.length) throw new Error(errors[0].message)
-      })
-    } catch {
-      dnsError = 'DNSLink update failed'
-    }
+  if (confirmed) {
+    await step.do('complete', RETRIES, () =>
+      completeDeployment(env, config, deployment as DeploymentRow),
+    )
+    return
   }
 
-  await finish('published', dnsError)
+  if (checkable.length && pins.every((pin) => pin === 'failed'))
+    return close('failed', 'Every provider failed to pin the site')
+
+  // Unconfirmed isn't failed: pins can take hours. The CAR stays so nothing is
+  // lost, and a recheck or the scheduled upkeep can finish the job.
+  await step.do('wait for confirmation', RETRIES, async () => {
+    await update(
+      "UPDATE omnipin_deployments SET status = 'pending', error = ?2 WHERE id = ?1",
+      id,
+      checkable.length
+        ? 'No provider has confirmed the pin yet'
+        : 'None of the providers can confirm a pin',
+    )
+  })
 }

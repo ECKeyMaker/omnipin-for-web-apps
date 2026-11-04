@@ -44,7 +44,7 @@ export const uploadOnIpfsNinja: UploadFunction = async ({
         json.error?.message || json.error || 'Unknown error',
       )
 
-    return { cid: json.cid ?? cid }
+    return { cid: json.cid }
   }
 
   // Pin existing CID

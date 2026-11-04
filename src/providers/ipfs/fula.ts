@@ -58,7 +58,7 @@ export const uploadOnFula: UploadFunction = async ({
 
     if (!res.ok) throw new DeployError(providerName, errorMessage(json))
 
-    return { cid: json.pin?.cid ?? cid, status: json.status }
+    return { cid: json.pin?.cid, status: json.status }
   }
 
   // Pin an existing CID via the standard Pinning Service API.

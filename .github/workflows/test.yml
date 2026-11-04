@@ -2,7 +2,7 @@ name: Test
 
 on:
   push:
-    branches: [main]
+    branches: [main, feat/web-embed]
     paths-ignore:
       - 'docs/**'
   pull_request:
@@ -23,13 +23,21 @@ jobs:
       - name: e2e
         run: pnpm test:e2e
       - name: test
-        run: pnpm test:report
+        run: pnpm test
+
+  # Depends on third parties, so a failure here doesn't fail the build.
+  live:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/setup@v3
+        with:
+          runtime: node@22
+      - name: live tests
+        run: pnpm test
         env:
           OMNIPIN_LIVE_TESTS: 1
           OMNIPIN_LIGHTHOUSE_TOKEN: ${{ secrets.OMNIPIN_LIGHTHOUSE_TOKEN }}
           OMNIPIN_IPFS_NINJA_TOKEN: ${{ secrets.OMNIPIN_IPFS_NINJA_TOKEN }}
           OMNIPIN_AIOZ_TOKEN: ${{ secrets.OMNIPIN_AIOZ_TOKEN }}
-      - name: Coveralls
-        uses: coverallsapp/github-action@v2
-        with:
-          file: coverage/lcov.info

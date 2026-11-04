@@ -9,7 +9,8 @@
     "moduleResolution": "NodeNext",
     "outDir": "dist",
     "isolatedModules": true,
-    "resolveJsonModule": true
+    "resolveJsonModule": true,
+    "jsx": "react-jsx"
   },
   "exclude": ["node_modules"],
   "include": ["src", "scripts", "test"]

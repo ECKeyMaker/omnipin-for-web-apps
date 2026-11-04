@@ -103,6 +103,13 @@ export class InvalidCIDError extends Error {
   }
 }
 
+export class InvalidCARError extends Error {
+  name = 'InvalidCARError'
+  constructor(reason: string, { cause }: { cause?: unknown } = {}) {
+    super(`Invalid CAR: ${reason}`, { cause })
+  }
+}
+
 export class MissingDirectoryError extends Error {
   name = 'MissingDirectoryError'
   constructor(dir: string) {

@@ -39,9 +39,18 @@ export default defineConfig({
       autoExternal: false,
       dts: true,
       experiments: { advancedEsm: true },
-      source: { entry: { index: './src/index.ts' } },
+      source: {
+        entry: {
+          index: './src/index.ts',
+          client: './src/client/index.ts',
+          'pack.worker': './src/client/pack.worker.ts',
+          react: './src/react/index.tsx',
+          worker: './src/worker/index.ts',
+        },
+      },
       output: {
         target: 'web',
+        externals: ['cloudflare:workers', 'react', 'react/jsx-runtime'],
         minify,
         legalComments: 'none',
         cleanDistPath: false,

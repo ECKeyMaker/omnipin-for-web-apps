@@ -160,9 +160,11 @@ export const sendTransaction = async ({
   })
 }
 
-export const waitForTransaction = async (provider: Provider, hash: Hex) => {
-  const maxAttempts = 10
-
+export const waitForTransaction = async (
+  provider: Provider,
+  hash: Hex,
+  { maxAttempts = 10 }: { maxAttempts?: number } = {},
+) => {
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     try {
       const rawReceipt = await provider.request({

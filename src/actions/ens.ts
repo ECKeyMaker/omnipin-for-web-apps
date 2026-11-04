@@ -7,22 +7,12 @@ import { getPublicKey } from 'ox/Secp256k1'
 import { toHex } from 'ox/Signature'
 import { chains, isTTY } from '../constants.js'
 import { styleText } from '../deps.js'
+import { prepareEnsUpdate } from '../ens.js'
 import { MissingCLIArgsError, MissingKeyError } from '../errors.js'
 import type { ChainName } from '../types.js'
 import { getExactAddress } from '../utils/address/getExactAddress.js'
-import { getEnsResolver } from '../utils/ens/get-resolver.js'
-import {
-  dnsEncodeName,
-  setContentHashV2,
-  supportsV2Contenthash,
-} from '../utils/ens/permissioned-resolver.js'
 import { resolveEnsName } from '../utils/ens/resolve-name.js'
-import {
-  chainToRpcUrl,
-  type EnsName,
-  prepareUpdateEnsArgs,
-  setContentHash,
-} from '../utils/ens.js'
+import { chainToRpcUrl, type EnsName } from '../utils/ens.js'
 import { assertCID } from '../utils/ipfs.js'
 import { logger } from '../utils/logger.js'
 import { getNonce } from '../utils/safe/constants.js'
@@ -79,27 +69,6 @@ export const ensAction = async ({
 
   if (!pk) throw new MissingKeyError('PK')
 
-  let contentHash = '',
-    node: Hex = '0x'
-  try {
-    const result = prepareUpdateEnsArgs({
-      cid,
-      domain,
-      codec: cid.length === 64 ? 'swarm' : 'ipfs',
-    })
-    contentHash = result.contentHash
-    node = result.node
-  } catch (e) {
-    if ((e as Error).message.includes('disallowed character'))
-      logger.error(`Invalid ENS domain: ${domain}`, e)
-    else if ((e as Error).message.includes('Incorrect length')) {
-      logger.error(`Invalid IPFS CID: ${cid}`, e)
-    } else {
-      logger.error(e)
-    }
-    return
-  }
-
   const address = fromPublicKey(getPublicKey({ privateKey: pk }))
 
   if (options.verbose)
@@ -109,18 +78,8 @@ export const ensAction = async ({
     ? await getExactAddress({ chain, addressOrEns: safeAddress, provider })
     : address
 
-  if (!domain.endsWith('.eth')) throw new Error('Domain must end with .eth')
-
-  const resolverAddress = await getEnsResolver({ provider, name: domain })
-
-  // ENSv2 resolvers (including the permissioned resolver) take a DNS-encoded
-  // name; the ENSv1 public resolver takes the namehash.
-  const data = (await supportsV2Contenthash({
-    provider,
-    address: resolverAddress,
-  }))
-    ? encodeData(setContentHashV2, [dnsEncodeName(domain), `0x${contentHash}`])
-    : encodeData(setContentHash, [node, `0x${contentHash}`])
+  const update = await prepareEnsUpdate({ provider, domain, cid })
+  const { to: resolverAddress, data } = update
 
   if (options.verbose) console.log('Transaction encoded data:', data)
 
@@ -231,11 +190,7 @@ export const ensAction = async ({
         `Transaction pending: ${chain.blockExplorers.default.url}/tx/${hash}`,
       )
 
-      try {
-        await waitForTransaction(provider, hash)
-      } catch (e) {
-        return logger.error(e)
-      }
+      await waitForTransaction(provider, hash)
 
       logger.success('Transaction succeeded')
       const browserLink = `https://${domain}.limo`

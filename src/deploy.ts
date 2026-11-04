@@ -204,6 +204,84 @@ const deployToSwarm = async ({
 const canUpload = (p: Provider) =>
   p.supported === 'both' || p.supported === 'upload'
 
+/** The provider that should receive the CAR, if any can. */
+export const pickUploader = (
+  providers: Provider[],
+  skipped?: Set<Provider>,
+): Provider | undefined =>
+  providers.find((p) => !skipped?.has(p) && canUpload(p))
+
+/**
+ * Publish to one IPFS provider. `deploy` is the usual entry point; this exists
+ * for callers that run each provider as its own durable, retryable step.
+ * `bytes` is only read when `first` is set, or by providers that always upload.
+ *
+ * @throws {DeployError} If the provider stored a different CID.
+ */
+export const publishToProvider = async ({
+  provider,
+  first,
+  bytes,
+  name,
+  size,
+  cid,
+  tokens,
+  verbose,
+  filecoinChain,
+  filecoinForceNewDataset,
+}: Pick<
+  DeployInput,
+  | 'bytes'
+  | 'name'
+  | 'size'
+  | 'tokens'
+  | 'verbose'
+  | 'filecoinChain'
+  | 'filecoinForceNewDataset'
+> & {
+  provider: Provider
+  first: boolean
+  cid: string
+}): Promise<PinStatus | undefined> => {
+  const envVar = findEnvVarProviderName(provider.name)
+
+  let bucketName: string | undefined
+
+  if (envVar.includes('FILEBASE'))
+    bucketName = tokens.get('FILEBASE_BUCKET_NAME')
+  else if (envVar.includes('4EVERLAND'))
+    bucketName = tokens.get('4EVERLAND_BUCKET_NAME')
+
+  const result = await provider.upload({
+    name,
+    bytes,
+    token: tokens.get(envVar)!,
+    bucketName,
+    cid,
+    first,
+    verbose,
+    baseURL: tokens.get('SPEC_URL'),
+    size,
+
+    // Filecoin
+    providerURL: tokens.get('FILECOIN_SP_URL'),
+    providerAddress: tokens.get('FILECOIN_SP_ADDRESS'),
+    pieceCid: tokens.get('FILECOIN_PIECE_CID'),
+    filecoinChain,
+    filecoinForceNewDataset,
+  })
+
+  // The CID goes on to ENS and DNSLink, so a provider that stored something
+  // else must not count as a success.
+  if (result.cid && !isSameCID(result.cid, cid))
+    throw new DeployError(
+      provider.name,
+      `returned CID ${result.cid}, expected ${cid}`,
+    )
+
+  return result.status
+}
+
 const deployToIpfs = async ({
   bytes,
   name,
@@ -268,7 +346,7 @@ const deployToIpfs = async ({
   // Only one provider receives the bytes; the rest pin by CID and fetch the
   // content over IPFS. Once something already pins the CID nobody *has* to
   // receive them, so an uploader is optional in that case.
-  const uploader = providers.find((p) => !skipped.has(p) && canUpload(p))
+  const uploader = pickUploader(providers, skipped)
 
   if (!uploader && !skipped.size) throw new NoUploaderError()
 
@@ -289,50 +367,23 @@ const deployToIpfs = async ({
       continue
     }
 
-    const envVar = findEnvVarProviderName(provider.name)
     onEvent?.({ type: 'start', provider })
 
-    let bucketName: string | undefined
-
-    if (envVar.includes('FILEBASE'))
-      bucketName = tokens.get('FILEBASE_BUCKET_NAME')
-    else if (envVar.includes('4EVERLAND'))
-      bucketName = tokens.get('4EVERLAND_BUCKET_NAME')
-
     try {
-      const result = await provider.upload({
-        name,
-        bytes,
-        token: tokens.get(envVar)!,
-        bucketName,
-        cid,
+      const pin = await publishToProvider({
+        provider,
         first: provider === uploader,
-        verbose,
-        baseURL: tokens.get('SPEC_URL'),
+        bytes,
+        name,
         size,
-
-        // Filecoin
-        providerURL: tokens.get('FILECOIN_SP_URL'),
-        providerAddress: tokens.get('FILECOIN_SP_ADDRESS'),
-        pieceCid: tokens.get('FILECOIN_PIECE_CID'),
+        cid,
+        tokens,
+        verbose,
         filecoinChain,
         filecoinForceNewDataset,
       })
 
-      // The CID goes on to ENS and DNSLink, so a provider that stored
-      // something else must not count as a success.
-      if (result.cid && !isSameCID(result.cid, cid))
-        throw new DeployError(
-          provider.name,
-          `returned CID ${result.cid}, expected ${cid}`,
-        )
-
-      results.push({
-        name: provider.name,
-        status: 'deployed',
-        cid,
-        pin: result.status,
-      })
+      results.push({ name: provider.name, status: 'deployed', cid, pin })
       onEvent?.({ type: 'success', provider: provider.name, cid })
     } catch (e) {
       if (strict) throw e

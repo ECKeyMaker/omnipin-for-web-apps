@@ -1,8 +1,10 @@
+import { CarBlockIterator } from '@ipld/car/iterator'
 import { CarWriter } from '@ipld/car/writer'
 import * as dagPb from '@ipld/dag-pb'
 import { base32 } from 'multiformats/bases/base32'
 import { CID } from 'multiformats/cid'
-import { InvalidCIDError } from '../errors.js'
+import { sha256 } from 'multiformats/hashes/sha2'
+import { InvalidCARError, InvalidCIDError } from '../errors.js'
 import { MemoryBlockstore } from './ipfs/blockstore.js'
 import { type FileCandidate, importer } from './ipfs/unixfs.js'
 
@@ -123,4 +125,55 @@ export const isSameCID = (a: string, b: string): boolean => {
   } catch {
     return true
   }
+}
+
+const sameBytes = (a: Uint8Array, b: Uint8Array) =>
+  a.byteLength === b.byteLength && a.every((byte, i) => byte === b[i])
+
+/**
+ * Prove a CAR really is the site `expected` names, reading it as a stream so
+ * the check doesn't hold the file in memory. A client picks the CID that goes
+ * on to ENS, so a server must run this before publishing an uploaded CAR.
+ *
+ * @throws {InvalidCARError} If the root is wrong, a block's bytes don't match
+ *   its CID, or a linked block is missing.
+ */
+export const verifyCAR = async (
+  source: AsyncIterable<Uint8Array>,
+  expected: string,
+): Promise<void> => {
+  const root = CID.parse(expected).toV1()
+  const reader = await CarBlockIterator.fromIterable(source).catch((cause) => {
+    throw new InvalidCARError('not a readable CAR', { cause })
+  })
+
+  const roots = await reader.getRoots()
+  if (roots.length !== 1 || !roots[0].toV1().equals(root))
+    throw new InvalidCARError(`root does not match ${expected}`)
+
+  const present = new Set<string>()
+  const linked = new Set<string>([root.toString()])
+
+  try {
+    for await (const { cid, bytes } of reader) {
+      if (cid.multihash.code !== sha256.code)
+        throw new InvalidCARError(`unsupported hash in block ${cid}`)
+
+      const digest = await sha256.digest(bytes)
+      if (!sameBytes(digest.bytes, cid.multihash.bytes))
+        throw new InvalidCARError(`block ${cid} does not match its hash`)
+
+      present.add(cid.toV1().toString())
+
+      if (cid.code === dagPb.code)
+        for (const { Hash } of dagPb.decode(bytes).Links)
+          linked.add(Hash.toV1().toString())
+    }
+  } catch (cause) {
+    if (cause instanceof InvalidCARError) throw cause
+    throw new InvalidCARError('corrupt block data', { cause })
+  }
+
+  for (const cid of linked)
+    if (!present.has(cid)) throw new InvalidCARError(`missing block ${cid}`)
 }

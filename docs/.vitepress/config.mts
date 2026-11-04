@@ -257,6 +257,14 @@ export default withMermaid({
             link: '/docs/ci-cd',
           },
           {
+            text: 'Embedding in web apps',
+            link: '/docs/web-apps',
+          },
+          {
+            text: 'Operating public funding',
+            link: '/docs/public-funding',
+          },
+          {
             text: 'Kubo',
             link: '/docs/kubo',
           },

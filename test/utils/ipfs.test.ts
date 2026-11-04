@@ -1,9 +1,16 @@
 import * as assert from 'node:assert'
 import { describe, it } from 'node:test'
 import { CarReader } from '@ipld/car/reader'
+import { CarWriter } from '@ipld/car/writer'
 import * as dagPb from '@ipld/dag-pb'
 import { CID } from 'multiformats/cid'
-import { assertCID, isSameCID, packFiles } from '../../src/utils/ipfs.js'
+import { InvalidCARError } from '../../src/errors.js'
+import {
+  assertCID,
+  isSameCID,
+  packFiles,
+  verifyCAR,
+} from '../../src/utils/ipfs.js'
 import { packCAR } from '../../src/utils/pack-node.js'
 import { cases } from '../fixtures/unixfs-cases.js'
 
@@ -68,6 +75,70 @@ describe('ipfs utils', () => {
       assert.deepStrictEqual(
         files.map((f) => f.path),
         ['b', 'a'],
+      )
+    })
+  })
+
+  describe('verifyCAR', () => {
+    const site = () =>
+      packFiles([
+        { path: 'index.html', content: te.encode('<h1>site</h1>') },
+        { path: 'big.bin', content: new Uint8Array(600_000).fill(7) },
+      ])
+    const stream = (bytes: Uint8Array) =>
+      (async function* () {
+        yield bytes
+      })()
+
+    it('accepts an intact CAR', async () => {
+      const { bytes, rootCID } = await site()
+      await verifyCAR(stream(bytes), rootCID.toString())
+    })
+
+    it('rejects a CAR claiming another root', async () => {
+      const { bytes } = await site()
+      const other = await packFiles([
+        { path: 'index.html', content: te.encode('other') },
+      ])
+      await assert.rejects(
+        verifyCAR(stream(bytes), other.rootCID.toString()),
+        InvalidCARError,
+      )
+    })
+
+    it('rejects changed block bytes', async () => {
+      const { bytes, rootCID } = await site()
+      const tampered = bytes.slice()
+      tampered[tampered.length - 5] ^= 0xff
+      await assert.rejects(
+        verifyCAR(stream(tampered), rootCID.toString()),
+        InvalidCARError,
+      )
+    })
+
+    it('rejects a CAR with a linked block missing', async () => {
+      const { bytes, rootCID } = await site()
+      const reader = await CarReader.fromBytes(bytes)
+      const { writer, out } = CarWriter.create([rootCID])
+      const collected = Array.fromAsync(out)
+      let kept = 0
+      for await (const block of reader.blocks())
+        if (kept++ < 2) await writer.put(block)
+      await writer.close()
+      const partial = new Uint8Array(
+        await new Blob((await collected) as BlobPart[]).arrayBuffer(),
+      )
+      await assert.rejects(
+        verifyCAR(stream(partial), rootCID.toString()),
+        /missing block/,
+      )
+    })
+
+    it('rejects something that is not a CAR', async () => {
+      const { rootCID } = await site()
+      await assert.rejects(
+        verifyCAR(stream(te.encode('not a car')), rootCID.toString()),
+        InvalidCARError,
       )
     })
   })

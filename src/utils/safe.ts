@@ -71,18 +71,17 @@ export const prepareSafeTransactionData = async ({
   return { safeTxHash }
 }
 
-export const generateSafeTransactionSignature = async ({
+/** The EIP-712 data an owner signs to approve a Safe transaction. */
+export const safeTransactionTypedData = ({
   txData,
   safeAddress,
   chainId,
-  privateKey,
 }: {
   txData: SafeTransactionData
   safeAddress: Address
   chainId: number
-  privateKey: Hex
-}): Promise<Signature> => {
-  const payload = getSignPayload({
+}) =>
+  ({
     types: {
       EIP712Domain: [
         {
@@ -124,7 +123,22 @@ export const generateSafeTransactionSignature = async ({
       refundReceiver: ZERO_ADDRESS,
       nonce: txData.nonce ?? 0n,
     },
-  })
+  }) as const
 
-  return sign({ payload, privateKey })
-}
+export const generateSafeTransactionSignature = async ({
+  txData,
+  safeAddress,
+  chainId,
+  privateKey,
+}: {
+  txData: SafeTransactionData
+  safeAddress: Address
+  chainId: number
+  privateKey: Hex
+}): Promise<Signature> =>
+  sign({
+    payload: getSignPayload(
+      safeTransactionTypedData({ txData, safeAddress, chainId }),
+    ),
+    privateKey,
+  })

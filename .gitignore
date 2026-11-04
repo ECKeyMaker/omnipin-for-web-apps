@@ -49,4 +49,6 @@ proof*.txt
 .DS_Store
 
 .vitepress/dist
-cache
+cachecontracts/out
+contracts/cache
+contracts/broadcast

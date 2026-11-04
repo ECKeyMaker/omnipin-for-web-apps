@@ -80,23 +80,27 @@ export const presignPut = async ({
   filename,
   region = 'us-east-1',
   expiresIn = 3600,
+  contentType,
   now = new Date(),
 }: S3Target & {
   filename: string
   expiresIn?: number
+  /** Signed into the URL, so an upload with any other type is rejected. */
+  contentType?: string
   now?: Date
 }): Promise<string> => {
   const { accessKeyId, secretAccessKey } = parseCredentials(token)
   const { amzDate, dateStamp } = timestamps(now)
   const path = `/${encodePath(bucketName)}/${encodePath(filename)}`
   const credentialScope = `${dateStamp}/${region}/s3/aws4_request`
+  const signedHeaders = contentType ? 'content-type;host' : 'host'
 
   const query: Record<string, string> = {
     'X-Amz-Algorithm': 'AWS4-HMAC-SHA256',
     'X-Amz-Credential': `${accessKeyId}/${credentialScope}`,
     'X-Amz-Date': amzDate,
     'X-Amz-Expires': String(expiresIn),
-    'X-Amz-SignedHeaders': 'host',
+    'X-Amz-SignedHeaders': signedHeaders,
   }
 
   const canonicalQuery = Object.entries(query)
@@ -108,9 +112,10 @@ export const presignPut = async ({
     'PUT',
     path,
     canonicalQuery,
+    ...(contentType ? [`content-type:${contentType}`] : []),
     `host:${apiUrl}`,
     '',
-    'host',
+    signedHeaders,
     'UNSIGNED-PAYLOAD',
   ].join('\n')
 

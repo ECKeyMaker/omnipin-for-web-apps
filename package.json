@@ -1,5 +1,5 @@
 {
-	"name": "omnipin",
+	"name": "omnipin-web-apps",
 	"version": "4.0.1",
 	"author": "v1rtl <hi@v1rtl.site>",
 	"repository": {
@@ -7,17 +7,22 @@
 		"url": "git+https://github.com/omnipin/omnipin.git"
 	},
 	"devDependencies": {
+		"@account-abstraction/contracts": "0.7.0",
 		"@biomejs/biome": "^2.4.7",
 		"@ipld/car": "^5.4.2",
 		"@ipld/dag-pb": "^4.1.7",
 		"@jsr/omnipin__foc": "^0.0.20",
 		"@multiformats/murmur3": "^2.2.5",
 		"@omnipin/foc": "npm:@jsr/omnipin__foc@0.0.20",
+		"@openzeppelin/contracts": "5.1.0",
 		"@rslib/core": "^0.23.2",
 		"@size-limit/file": "^12.0.1",
 		"@stauro/filebase-upload": "npm:@jsr/stauro__filebase-upload",
 		"@types/node": "^26.2.0",
+		"@types/react": "^19.3.0",
 		"@types/varint": "^6.0.3",
+		"fflate": "^0.8.3",
+		"forge-std": "github:foundry-rs/forge-std#v1.9.7",
 		"hamt-sharding": "^3.0.8",
 		"interface-blockstore": "^7.0.1",
 		"interface-store": "^8.0.0",
@@ -26,6 +31,7 @@
 		"nanotar": "^0.3.0",
 		"ox": "^0.14.8",
 		"prool": "^0.2.4",
+		"react": "^19.3.1",
 		"size-limit": "^12.0.1",
 		"spektr": "^0.2.0",
 		"tinyglobby": "^0.2.15",
@@ -41,7 +47,8 @@
 		"node": ">=22"
 	},
 	"files": [
-		"dist"
+		"dist",
+		"contracts/src"
 	],
 	"homepage": "https://github.com/omnipin/omnipin",
 	"keywords": [
@@ -58,14 +65,15 @@
 		]
 	},
 	"scripts": {
-		"build": "rslib",
+		"build": "rslib && cp src/worker/schema.sql dist/schema.sql",
 		"prepublishOnly": "pnpm build && size-limit",
 		"check": "biome check",
 		"types": "tsc --noEmit",
 		"test": "node --experimental-test-module-mocks --import ./test/register.ts --test 'test/**/*.test.ts'",
 		"test:report": "mkdir -p coverage && node --experimental-test-module-mocks --import ./test/register.ts --test --experimental-test-coverage --test-coverage-include='src/**' --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=coverage/lcov.info 'test/**/*.test.ts'",
 		"test:e2e": "node --import ./test/register.ts --test 'e2e/**/*.test.ts'",
-		"check:core": "node scripts/check-core.ts"
+		"check:core": "node scripts/check-core.ts",
+		"test:contracts": "cd contracts && forge test"
 	},
 	"size-limit": [
 		{
@@ -85,6 +93,28 @@
 		".": {
 			"types": "./dist/index.d.ts",
 			"import": "./dist/index.js"
+		},
+		"./client": {
+			"types": "./dist/client/index.d.ts",
+			"import": "./dist/client.js"
+		},
+		"./react": {
+			"types": "./dist/react/index.d.ts",
+			"import": "./dist/react.js"
+		},
+		"./worker": {
+			"types": "./dist/worker/index.d.ts",
+			"import": "./dist/worker.js"
+		},
+		"./pack.worker": "./dist/pack.worker.js",
+		"./schema.sql": "./dist/schema.sql"
+	},
+	"peerDependencies": {
+		"react": ">=18"
+	},
+	"peerDependenciesMeta": {
+		"react": {
+			"optional": true
 		}
 	}
 }

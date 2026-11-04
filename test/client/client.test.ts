@@ -1,6 +1,7 @@
 import * as assert from 'node:assert'
 import { afterEach, describe, it } from 'node:test'
 import {
+  connectWallet,
   createDeployClient,
   type GatewayError,
 } from '../../src/client/index.js'
@@ -133,6 +134,77 @@ describe('deploy', () => {
   })
 })
 
+describe('confirmEns', () => {
+  it('resolves true once the chain matches', async () => {
+    let checks = 0
+    respond(() => Response.json({ confirmed: ++checks === 2 }))
+    assert.strictEqual(await client().confirmEns('1', { interval: 1 }), true)
+    assert.strictEqual(checks, 2)
+  })
+
+  it('gives up without calling it failed', async () => {
+    respond(() => Response.json({ confirmed: false }))
+    assert.strictEqual(
+      await client().confirmEns('1', { attempts: 2, interval: 1 }),
+      false,
+    )
+  })
+})
+
+describe('packing in a worker', () => {
+  class FakeWorker {
+    terminated = false
+    onmessage: ((event: { data: unknown }) => void) | null = null
+    onerror: ((event: { message: string }) => void) | null = null
+    postMessage() {}
+    terminate() {
+      this.terminated = true
+    }
+  }
+
+  it('terminates the worker when cancelled', async () => {
+    const worker = new FakeWorker()
+    const abort = new AbortController()
+    const running = createDeployClient({
+      apiBase: 'https://gateway.test',
+      getToken: () => 'token',
+      createWorker: () => worker as unknown as Worker,
+    }).deploy(site, { name: 'site', signal: abort.signal })
+
+    abort.abort(new Error('cancelled'))
+
+    await assert.rejects(running, /cancelled/)
+    assert.strictEqual(worker.terminated, true)
+  })
+
+  it('forwards progress, then finishes', async () => {
+    const worker = new FakeWorker()
+    respond(gateway([]))
+    const seen: number[] = []
+    const running = createDeployClient({
+      apiBase: 'https://gateway.test',
+      getToken: () => 'token',
+      pollInterval: 1,
+      createWorker: () => {
+        queueMicrotask(() => {
+          worker.onmessage?.({ data: { progress: { done: 1, total: 2 } } })
+          worker.onmessage?.({
+            data: { site: { cid: 'x', car: new Blob(['x']), size: 1 } },
+          })
+        })
+        return worker as unknown as Worker
+      },
+    }).deploy(site, {
+      name: 'site',
+      onProgress: ({ done }) => seen.push(done),
+    })
+
+    assert.strictEqual((await running).status, 'published')
+    assert.deepStrictEqual(seen, [1])
+    assert.strictEqual(worker.terminated, true)
+  })
+})
+
 describe('updateEns', () => {
   const sponsoredPlan = {
     call,
@@ -205,5 +277,17 @@ describe('updateEns', () => {
     })
     await assert.rejects(client().updateEns('1', { wallet: w, account }))
     assert.ok(!w.calls.some((c) => c.method === 'eth_sendTransaction'))
+  })
+})
+
+describe('connectWallet', () => {
+  it('returns the first account', async () => {
+    const w = wallet({ eth_requestAccounts: [account] })
+    assert.strictEqual(await connectWallet(w), account)
+  })
+
+  it('fails clearly when no account is shared', async () => {
+    const w = wallet({ eth_requestAccounts: [] })
+    await assert.rejects(connectWallet(w), /did not share/)
   })
 })

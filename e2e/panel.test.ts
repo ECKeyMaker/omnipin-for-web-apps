@@ -100,7 +100,7 @@ describe('DeployPanel', () => {
       setInput(query<HTMLInputElement>('input[required]'), 'hello'),
     )
     await act(async () =>
-      selectFiles(query<HTMLInputElement>('input[type=file]'), [
+      selectFiles(query<HTMLInputElement>('input[data-kind=files]'), [
         new File(['<h1>hi</h1>'], 'index.html'),
       ]),
     )
@@ -123,25 +123,128 @@ describe('DeployPanel', () => {
     assert.strictEqual(query('[role=alert]'), null)
   })
 
-  it('reports a site it refuses to publish', async () => {
+  it('reviews a selection, then refuses secrets before anything uploads', async () => {
+    let requests = 0
+    const previous = globalThis.fetch
+    globalThis.fetch = (async () => {
+      requests++
+      return new Response()
+    }) as typeof fetch
+
     await mount()
+
+    await act(async () =>
+      selectFiles(query<HTMLInputElement>('input[data-kind=files]'), [
+        new File(['<h1>hi</h1>'], 'index.html'),
+      ]),
+    )
+    assert.match(query('[data-testid=review]').textContent ?? '', /1 file/)
+
+    await act(async () =>
+      selectFiles(query<HTMLInputElement>('input[data-kind=files]'), [
+        new File(['<h1>hi</h1>'], 'index.html'),
+        new File(['SECRET=1'], '.env'),
+      ]),
+    )
+
+    assert.match(query('[role=alert]').textContent ?? '', /secrets/)
+    assert.strictEqual(query('[data-testid=review]'), null)
+    assert.strictEqual(
+      query<HTMLButtonElement>('button[type=submit]').disabled,
+      true,
+    )
+    assert.strictEqual(requests, 0)
+    globalThis.fetch = previous
+  })
+
+  it('offers a folder picker', async () => {
+    await mount()
+    assert.ok(query('input[data-kind=folder]').hasAttribute('webkitdirectory'))
+  })
+
+  it('walks through the ENS update with a wallet', async () => {
+    const previous = globalThis.fetch
+    globalThis.fetch = (async (url: string, init: RequestInit = {}) => {
+      const target = String(url)
+      if (target.endsWith('/sponsorship'))
+        return Response.json({
+          call: { to: `0x${'cc'.repeat(20)}`, data: '0x12' },
+          sponsored: false,
+        })
+      if (target.endsWith('/ens/verify'))
+        return Response.json({ confirmed: true })
+      if (target.includes('storage')) return new Response(null, { status: 200 })
+      if (target.endsWith('/') && init.method === 'POST')
+        return Response.json(
+          {
+            id: '1',
+            uploadUrl: 'https://storage.test/put',
+            contentType: 'application/vnd.ipld.car',
+          },
+          { status: 201 },
+        )
+      if (target.endsWith('/start')) return Response.json({}, { status: 202 })
+      return Response.json({
+        id: '1',
+        status: 'published',
+        providers: [],
+        ens: { name: 'site.eth', status: null },
+        urls: { gateway: 'https://site.ipfs.dweb.link/' },
+        error: null,
+      })
+    }) as typeof fetch
+
+    const methods: string[] = []
+    const wallet = {
+      request: async ({ method }: { method: string }) => {
+        methods.push(method)
+        return method === 'eth_requestAccounts'
+          ? [`0x${'aa'.repeat(20)}`]
+          : '0xhash'
+      },
+    }
+
+    let deployed = (_: unknown) => {}
+    const finished = new Promise((resolve) => {
+      deployed = resolve
+    })
+    await mount({ ens: true, wallet, onDeployed: deployed })
 
     await act(async () =>
       setInput(query<HTMLInputElement>('input[required]'), 'hello'),
     )
     await act(async () =>
-      selectFiles(query<HTMLInputElement>('input[type=file]'), [
+      selectFiles(query<HTMLInputElement>('input[data-kind=files]'), [
         new File(['<h1>hi</h1>'], 'index.html'),
-        new File(['SECRET=1'], '.env'),
       ]),
     )
     await act(async () => {
       query('form').dispatchEvent(
         new dom.window.Event('submit', { bubbles: true, cancelable: true }),
       )
-      await new Promise((resolve) => setTimeout(resolve, 20))
+      await finished
     })
 
-    assert.match(query('[role=alert]').textContent ?? '', /secrets/)
+    const update = Array.from(document.querySelectorAll('button')).find((b) =>
+      b.textContent?.includes('site.eth'),
+    )
+    assert.ok(update, 'expected an ENS button once published')
+
+    await act(async () => {
+      update.dispatchEvent(
+        new dom.window.MouseEvent('click', { bubbles: true }),
+      )
+      await new Promise((resolve) => setTimeout(resolve, 30))
+    })
+
+    assert.deepStrictEqual(methods, [
+      'eth_requestAccounts',
+      'eth_sendTransaction',
+    ])
+    assert.match(
+      query('[role=status]').textContent ?? '',
+      /ENS name updated.*paid by your wallet/,
+    )
+    globalThis.fetch = previous
   })
 })

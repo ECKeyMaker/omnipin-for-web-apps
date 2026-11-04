@@ -9,7 +9,10 @@ const scope = globalThis as unknown as {
 
 scope.onmessage = async ({ data }) => {
   try {
-    scope.postMessage({ site: await packSite(data) })
+    const site = await packSite(data, (progress) =>
+      scope.postMessage({ progress }),
+    )
+    scope.postMessage({ site })
   } catch (error) {
     scope.postMessage({ error: (error as Error).message })
   }

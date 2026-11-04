@@ -2,6 +2,8 @@ import * as assert from 'node:assert'
 import { describe, it } from 'node:test'
 import { strToU8, zipSync } from 'fflate'
 import {
+  fromDataTransfer,
+  fromFileList,
   fromZip,
   InvalidSiteError,
   prepareSite,
@@ -155,7 +157,71 @@ describe('fromZip', () => {
   })
 })
 
+describe('fromFileList', () => {
+  it('keeps folder structure from a directory picker', () => {
+    const file = new File(['hi'], 'index.html')
+    Object.defineProperty(file, 'webkitRelativePath', {
+      value: 'dist/index.html',
+    })
+    assert.deepStrictEqual(paths(fromFileList([file])), ['dist/index.html'])
+  })
+})
+
+describe('fromDataTransfer', () => {
+  const fileEntry = (path: string) => ({
+    isFile: true,
+    isDirectory: false,
+    fullPath: path,
+    file: (done: (f: File) => void) => done(new File(['x'], 'f')),
+  })
+
+  it('walks dropped folders across every readEntries batch', async () => {
+    const batches = [
+      [fileEntry('/site/index.html')],
+      [fileEntry('/site/a.js')],
+      [],
+    ]
+    const folder = {
+      isFile: false,
+      isDirectory: true,
+      fullPath: '/site',
+      createReader: () => ({
+        readEntries: (done: (e: unknown[]) => void) =>
+          done(batches.shift() ?? []),
+      }),
+    }
+
+    const files = await fromDataTransfer({
+      items: [{ webkitGetAsEntry: () => folder }],
+      files: [],
+    } as unknown as DataTransfer)
+
+    assert.deepStrictEqual(paths(files), ['site/a.js', 'site/index.html'])
+  })
+
+  it('falls back to plain files', async () => {
+    const files = await fromDataTransfer({
+      items: [],
+      files: [new File(['x'], 'index.html')],
+    } as unknown as DataTransfer)
+    assert.deepStrictEqual(paths(files), ['index.html'])
+  })
+})
+
 describe('packSite', () => {
+  it('reports progress through to the full size', async () => {
+    const seen: number[] = []
+    await packSite(
+      [{ path: 'big.bin', content: new Blob([new Uint8Array(2_500_000)]) }],
+      ({ done, total }) => {
+        assert.strictEqual(total, 2_500_000)
+        seen.push(done)
+      },
+    )
+    assert.strictEqual(seen.at(-1), 2_500_000)
+    assert.ok(seen.length > 1)
+  })
+
   it('matches packFiles, so browser and CLI agree on the CID', async () => {
     const big = new Uint8Array(3_000_000).map((_, i) => i % 251)
     const site = await packSite([

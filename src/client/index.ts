@@ -2,10 +2,10 @@ import type { Address } from 'ox/Address'
 import type { Hex } from 'ox/Hex'
 import type { WalletProvider } from '../utils/signer.js'
 import type { SiteFile } from './files.js'
-import { type PackedSite, packSite } from './pack.js'
+import { type PackedSite, type PackProgress, packSite } from './pack.js'
 
 export * from './files.js'
-export { type PackedSite, packSite } from './pack.js'
+export { type PackedSite, type PackProgress, packSite } from './pack.js'
 
 export class GatewayError extends Error {
   name = 'GatewayError'
@@ -61,20 +61,36 @@ export type DeployOptions = {
   signal?: AbortSignal
   onStage?: (stage: DeployStage) => void
   onStatus?: (status: DeploymentStatus) => void
+  onProgress?: (progress: PackProgress) => void
 }
 
-const packInWorker = (createWorker: () => Worker, files: SiteFile[]) =>
+const packInWorker = (
+  createWorker: () => Worker,
+  files: SiteFile[],
+  onProgress?: (progress: PackProgress) => void,
+  signal?: AbortSignal,
+) =>
   new Promise<PackedSite>((resolve, reject) => {
+    signal?.throwIfAborted()
+
     const worker = createWorker()
+    const stop = (settle: () => void) => {
+      signal?.removeEventListener('abort', cancel)
+      worker.terminate()
+      settle()
+    }
+    // Terminating is what actually cancels: work in a worker can't be
+    // interrupted from outside any other way.
+    const cancel = () => stop(() => reject(signal?.reason))
+
+    signal?.addEventListener('abort', cancel, { once: true })
+
     worker.onmessage = ({ data }) => {
-      worker.terminate()
-      if (data.error) reject(new Error(data.error))
-      else resolve(data.site)
+      if (data.progress) onProgress?.(data.progress)
+      else if (data.error) stop(() => reject(new Error(data.error)))
+      else stop(() => resolve(data.site))
     }
-    worker.onerror = (event) => {
-      worker.terminate()
-      reject(new Error(event.message))
-    }
+    worker.onerror = (event) => stop(() => reject(new Error(event.message)))
     worker.postMessage(files)
   })
 
@@ -113,6 +129,18 @@ const walletSupportsSponsorship = async (
 
 const SETTLED = new Set(['published', 'failed', 'rejected'])
 
+/** Ask a wallet for its account, prompting the user if needed. */
+export const connectWallet = async (
+  wallet: WalletProvider,
+): Promise<Address> => {
+  const [account] = (await wallet.request({
+    method: 'eth_requestAccounts',
+  })) as Address[]
+
+  if (!account) throw new Error('The wallet did not share an account')
+  return account
+}
+
 export const createDeployClient = ({
   apiBase,
   getToken,
@@ -146,12 +174,20 @@ export const createDeployClient = ({
   /** Pack, upload and publish a site, resolving once publishing settles. */
   const deploy = async (
     files: SiteFile[],
-    { name, ens, dnslink, signal, onStage, onStatus }: DeployOptions,
+    {
+      name,
+      ens,
+      dnslink,
+      signal,
+      onStage,
+      onStatus,
+      onProgress,
+    }: DeployOptions,
   ): Promise<DeploymentStatus> => {
     onStage?.('packing')
     const site = createWorker
-      ? await packInWorker(createWorker, files)
-      : await packSite(files)
+      ? await packInWorker(createWorker, files, onProgress, signal)
+      : await packSite(files, onProgress)
     signal?.throwIfAborted()
 
     onStage?.('uploading')
@@ -247,7 +283,30 @@ export const createDeployClient = ({
   const verifyEns = (id: string) =>
     request<{ confirmed: boolean }>(`/${id}/ens/verify`, { method: 'POST' })
 
-  return { deploy, status, updateEns, verifyEns }
+  /**
+   * Wait for an ENS update to land. Polling the chain through the gateway
+   * covers both sponsored and normal transactions.
+   *
+   * @returns Whether the name was confirmed in time. `false` doesn't mean it
+   *   failed: the transaction may still be pending.
+   */
+  const confirmEns = async (
+    id: string,
+    {
+      attempts = 40,
+      interval = 5000,
+      signal,
+    }: { attempts?: number; interval?: number; signal?: AbortSignal } = {},
+  ): Promise<boolean> => {
+    for (let attempt = 0; attempt < attempts; attempt++) {
+      signal?.throwIfAborted()
+      if ((await verifyEns(id)).confirmed) return true
+      await sleep(interval, signal)
+    }
+    return false
+  }
+
+  return { deploy, status, updateEns, verifyEns, confirmEns }
 }
 
 export type DeployClient = ReturnType<typeof createDeployClient>

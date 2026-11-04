@@ -1,24 +1,40 @@
 /** @jsxRuntime automatic */
 import { useCallback, useMemo, useRef, useState } from 'react'
 import {
+  connectWallet,
   createDeployClient,
   type DeployClientOptions,
   type DeploymentStatus,
   type DeployStage,
+  fromDataTransfer,
   fromFileList,
   fromZip,
+  type PackProgress,
   prepareSite,
   type SiteFile,
   type SiteLimits,
 } from '../client/index.js'
+import { fileSize } from '../utils/format.js'
+import type { WalletProvider } from '../utils/signer.js'
 
 export type UseDeployOptions = DeployClientOptions & { limits?: SiteLimits }
 
+type EnsState =
+  | { step: 'idle' }
+  | { step: 'signing' }
+  | { step: 'confirming'; sponsored: boolean }
+  | { step: 'confirmed'; sponsored: boolean }
+  | { step: 'pending'; sponsored: boolean }
+
 type State = {
   stage: DeployStage | 'idle'
+  progress?: PackProgress
   deployment?: DeploymentStatus
+  ens: EnsState
   error?: string
 }
+
+const idle: State = { stage: 'idle', ens: { step: 'idle' } }
 
 /** Headless deploy state, for apps that bring their own interface. */
 export const useDeploy = ({ limits, ...options }: UseDeployOptions) => {
@@ -37,7 +53,7 @@ export const useDeploy = ({ limits, ...options }: UseDeployOptions) => {
     [apiBase, appId],
   )
 
-  const [state, setState] = useState<State>({ stage: 'idle' })
+  const [state, setState] = useState<State>(idle)
   const controller = useRef<AbortController | null>(null)
 
   const deploy = useCallback(
@@ -48,7 +64,7 @@ export const useDeploy = ({ limits, ...options }: UseDeployOptions) => {
       controller.current?.abort()
       const abort = new AbortController()
       controller.current = abort
-      setState({ stage: 'packing' })
+      setState({ ...idle, stage: 'packing' })
 
       try {
         const { files } = prepareSite(input, limits)
@@ -56,18 +72,19 @@ export const useDeploy = ({ limits, ...options }: UseDeployOptions) => {
           ...settings,
           signal: abort.signal,
           onStage: (stage) => setState((s) => ({ ...s, stage })),
-          onStatus: (status) =>
-            setState((s) => ({ ...s, deployment: status })),
+          onStatus: (status) => setState((s) => ({ ...s, deployment: status })),
+          onProgress: (progress) => setState((s) => ({ ...s, progress })),
         })
+
+        const published = deployment.status === 'published'
 
         setState((s) => ({
           ...s,
           deployment,
-          stage: deployment.status === 'published' ? 'published' : 'idle',
-          error:
-            deployment.status === 'published'
-              ? undefined
-              : (deployment.error ?? `Deployment ${deployment.status}`),
+          stage: published ? 'published' : 'idle',
+          error: published
+            ? undefined
+            : (deployment.error ?? `Deployment ${deployment.status}`),
         }))
         return deployment
       } catch (error) {
@@ -85,10 +102,42 @@ export const useDeploy = ({ limits, ...options }: UseDeployOptions) => {
 
   const cancel = useCallback(() => {
     controller.current?.abort()
-    setState({ stage: 'idle' })
+    setState(idle)
   }, [])
 
-  return { ...state, client, deploy, cancel }
+  /**
+   * Point the deployment's ENS name at it. The public pool pays the gas when
+   * the wallet can use it.
+   */
+  const updateEns = useCallback(
+    async (wallet: WalletProvider) => {
+      const id = state.deployment?.id
+      if (!id) return
+
+      setState((s) => ({ ...s, ens: { step: 'signing' }, error: undefined }))
+
+      try {
+        const account = await connectWallet(wallet)
+        const { sponsored } = await client.updateEns(id, { wallet, account })
+        setState((s) => ({ ...s, ens: { step: 'confirming', sponsored } }))
+
+        const confirmed = await client.confirmEns(id)
+        setState((s) => ({
+          ...s,
+          ens: { step: confirmed ? 'confirmed' : 'pending', sponsored },
+        }))
+      } catch (error) {
+        setState((s) => ({
+          ...s,
+          ens: { step: 'idle' },
+          error: (error as Error).message,
+        }))
+      }
+    },
+    [client, state.deployment?.id],
+  )
+
+  return { ...state, client, deploy, cancel, updateEns }
 }
 
 const STAGE_LABELS: Record<DeployStage, string> = {
@@ -98,11 +147,26 @@ const STAGE_LABELS: Record<DeployStage, string> = {
   published: 'Published',
 }
 
+const ENS_LABELS: Record<Exclude<EnsState['step'], 'idle'>, string> = {
+  signing: 'Approve the update in your wallet…',
+  confirming: 'Waiting for the transaction…',
+  confirmed: 'ENS name updated',
+  pending: 'Still waiting for the transaction. It may take a while to land.',
+}
+
+const percent = ({ done, total }: PackProgress) =>
+  total ? Math.floor((done / total) * 100) : 0
+
 export type DeployPanelProps = UseDeployOptions & {
   /** Offer an ENS field. */
   ens?: boolean
+  /** EIP-1193 provider. Defaults to the browser's injected wallet. */
+  wallet?: WalletProvider
   onDeployed?: (deployment: DeploymentStatus) => void
 }
+
+const injectedWallet = () =>
+  (globalThis as { ethereum?: WalletProvider }).ethereum
 
 /**
  * Drop-in deploy form. Style it with the `--omnipin-*` CSS variables, or use
@@ -110,30 +174,43 @@ export type DeployPanelProps = UseDeployOptions & {
  */
 export const DeployPanel = ({
   ens: offerEns,
+  wallet,
   onDeployed,
   ...options
 }: DeployPanelProps) => {
-  const { stage, deployment, error, deploy, cancel } = useDeploy(options)
+  const { stage, progress, deployment, ens, error, deploy, cancel, updateEns } =
+    useDeploy(options)
   const [files, setFiles] = useState<SiteFile[]>([])
+  const [size, setSize] = useState(0)
   const [name, setName] = useState('')
-  const [ens, setEns] = useState('')
+  const [ensName, setEnsName] = useState('')
   const [readError, setReadError] = useState<string>()
+  const [dragging, setDragging] = useState(false)
 
-  const pickFiles = async (list: FileList | null) => {
+  // Checking on selection means a bad folder fails before anything uploads.
+  const review = async (read: () => SiteFile[] | Promise<SiteFile[]>) => {
     setReadError(undefined)
-    if (!list?.length) return
-
     try {
-      const [first] = list
-      setFiles(
-        list.length === 1 && first.name.endsWith('.zip')
-          ? await fromZip(first, options.limits)
-          : fromFileList(list),
-      )
+      const prepared = prepareSite(await read(), options.limits)
+      setFiles(prepared.files)
+      setSize(prepared.size)
     } catch (e) {
       setFiles([])
+      setSize(0)
       setReadError((e as Error).message)
     }
+  }
+
+  const pickFiles = (list: FileList | null) => {
+    if (!list?.length) return
+
+    const [first] = list
+    const isZip = list.length === 1 && first.name.endsWith('.zip')
+    const picked = Array.from(list)
+
+    return review(() =>
+      isZip ? fromZip(first, options.limits) : fromFileList(picked),
+    )
   }
 
   const busy =
@@ -143,12 +220,15 @@ export const DeployPanel = ({
     event.preventDefault()
     const result = await deploy(files, {
       name,
-      ...(ens ? { ens } : {}),
+      ...(ensName ? { ens: ensName } : {}),
     })
     if (result?.status === 'published') onDeployed?.(result)
   }
 
+  const availableWallet = wallet ?? injectedWallet()
   const message = error ?? readError
+  const showEns =
+    stage === 'published' && deployment?.ens && ens.step === 'idle'
 
   return (
     <form
@@ -169,35 +249,80 @@ export const DeployPanel = ({
           onChange={(e) => setName(e.target.value)}
         />
       </label>
-      <label>
-        Built site (folder contents or .zip)
-        <input
-          type="file"
-          multiple
-          onChange={(e) => pickFiles(e.target.files)}
-        />
-      </label>
+
+      <fieldset
+        data-dragging={dragging}
+        onDragOver={(e) => {
+          e.preventDefault()
+          setDragging(true)
+        }}
+        onDragLeave={() => setDragging(false)}
+        onDrop={(e) => {
+          e.preventDefault()
+          setDragging(false)
+          // Read before awaiting: the drop's data is gone after this event.
+          const reading = fromDataTransfer(e.dataTransfer)
+          review(() => reading)
+        }}
+        style={{
+          borderColor: dragging ? 'var(--omnipin-accent, currentColor)' : undefined,
+        }}
+      >
+        <legend>Built site</legend>
+        <p>Drop your build folder or a .zip here, or choose one:</p>
+        <label>
+          Folder
+          <input
+            type="file"
+            data-kind="folder"
+            {...{ webkitdirectory: '', directory: '' }}
+            onChange={(e) => pickFiles(e.target.files)}
+          />
+        </label>
+        <label>
+          Files or .zip
+          <input
+            type="file"
+            data-kind="files"
+            multiple
+            onChange={(e) => pickFiles(e.target.files)}
+          />
+        </label>
+        {files.length > 0 && (
+          <p data-testid="review">
+            {files.length} {files.length === 1 ? 'file' : 'files'},{' '}
+            {fileSize(size)}. Everything you publish is public and can't be
+            fully removed.
+          </p>
+        )}
+      </fieldset>
+
       {offerEns && (
         <label>
           ENS name (optional)
           <input
             placeholder="mysite.eth"
-            value={ens}
-            onChange={(e) => setEns(e.target.value)}
+            value={ensName}
+            onChange={(e) => setEnsName(e.target.value)}
           />
         </label>
       )}
+
       {busy ? (
         <button type="button" onClick={cancel}>
           Cancel
         </button>
       ) : (
         <button type="submit" disabled={!files.length || !name}>
-          Deploy
+          {message && stage === 'idle' && files.length ? 'Try again' : 'Deploy'}
         </button>
       )}
+
       <div role="status" aria-live="polite">
         {stage !== 'idle' && !message && <p>{STAGE_LABELS[stage]}</p>}
+        {stage === 'packing' && progress && (
+          <progress max={100} value={percent(progress)} />
+        )}
         {deployment?.providers.map((p) => (
           <p key={p.name}>
             {p.name}: {p.pin ?? p.status}
@@ -208,7 +333,25 @@ export const DeployPanel = ({
             {deployment.urls.gateway}
           </a>
         )}
+        {ens.step !== 'idle' && <p>{ENS_LABELS[ens.step]}</p>}
+        {ens.step === 'confirmed' && (
+          <p>
+            {ens.sponsored
+              ? 'Gas was paid by the public pool.'
+              : 'Gas was paid by your wallet.'}
+          </p>
+        )}
       </div>
+
+      {showEns &&
+        (availableWallet ? (
+          <button type="button" onClick={() => updateEns(availableWallet)}>
+            Point {deployment.ens?.name} at this site
+          </button>
+        ) : (
+          <p>Connect a wallet to point {deployment.ens?.name} at this site.</p>
+        ))}
+
       {message && (
         <p role="alert" style={{ color: 'var(--omnipin-error, #b42318)' }}>
           {message}

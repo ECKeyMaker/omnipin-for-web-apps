@@ -116,6 +116,57 @@ export const fromFileList = (list: Iterable<File>): SiteFile[] =>
     content: file,
   }))
 
+type Entry = {
+  isFile: boolean
+  isDirectory: boolean
+  fullPath: string
+  file?: (done: (file: File) => void, fail: (e: unknown) => void) => void
+  createReader?: () => {
+    readEntries: (
+      done: (entries: Entry[]) => void,
+      fail: (e: unknown) => void,
+    ) => void
+  }
+}
+
+const readEntry = async (entry: Entry): Promise<SiteFile[]> => {
+  if (entry.isFile)
+    return [
+      {
+        path: entry.fullPath.replace(/^\//, ''),
+        content: await new Promise<File>((resolve, reject) =>
+          entry.file?.(resolve, reject),
+        ),
+      },
+    ]
+
+  const reader = entry.createReader?.()
+  const files: SiteFile[] = []
+
+  // `readEntries` returns at most 100 at a time, and an empty list when done.
+  for (;;) {
+    const batch = await new Promise<Entry[]>((resolve, reject) =>
+      reader?.readEntries(resolve, reject),
+    )
+    if (!batch.length) return files
+    for (const child of batch) files.push(...(await readEntry(child)))
+  }
+}
+
+/** Files from a drop, including whole folders. */
+export const fromDataTransfer = async (
+  data: DataTransfer,
+): Promise<SiteFile[]> => {
+  // Entries must be taken synchronously: the list empties after the event.
+  const entries = Array.from(data.items)
+    .map((item) => item.webkitGetAsEntry?.() as unknown as Entry | null)
+    .filter((entry): entry is Entry => Boolean(entry))
+
+  if (!entries.length) return fromFileList(Array.from(data.files))
+
+  return (await Promise.all(entries.map(readEntry))).flat()
+}
+
 /** Read a zip without letting a zip bomb expand past `maxBytes`. */
 export const fromZip = async (
   zip: Blob,

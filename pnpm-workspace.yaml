@@ -1,0 +1,4 @@
+# Test tooling ships prebuilt binaries, so its install scripts aren't needed.
+allowBuilds:
+  esbuild: false
+  workerd: false

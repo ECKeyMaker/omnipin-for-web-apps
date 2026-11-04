@@ -118,6 +118,7 @@ export const PROVIDERS = {
 - Use the `node:test` runner with `node:assert`
 - Use CIDv1 for test CIDs (`bafybe...`)
 - Skip live API tests if no token: pass `{ skip: !hasToken }` to `it()`
+- `pnpm test` must not need the network. Tests that call a live service without a token skip unless `OMNIPIN_LIVE_TESTS=1`, which CI sets
 
 ```typescript
 import * as assert from 'node:assert'

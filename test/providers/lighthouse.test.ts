@@ -5,6 +5,9 @@ import { describe, it } from 'node:test'
 import { PROVIDERS } from '../../src/constants.js'
 import { unpinOnLighthouse } from '../../src/providers/ipfs/lighthouse.js'
 
+// Reaches a live third-party service. Set OMNIPIN_LIVE_TESTS=1 to run it.
+const live = Boolean(process.env.OMNIPIN_LIVE_TESTS)
+
 const { upload: uploadOnLighthouse } = PROVIDERS.LIGHTHOUSE_TOKEN
 const _hasLighthouseToken = Boolean(process.env.OMNIPIN_LIGHTHOUSE_TOKEN)
 
@@ -50,7 +53,9 @@ describe('Lighthouse', () => {
   })
 
   describe('unpin', () => {
-    it('should throw if CID not found in uploads list', async () => {
+    it('should throw if CID not found in uploads list', {
+      skip: !live,
+    }, async () => {
       await assert.rejects(
         unpinOnLighthouse({
           token: 'bad-token',

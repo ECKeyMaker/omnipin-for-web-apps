@@ -9,6 +9,9 @@ import {
   isFulaChainKey,
 } from '../../src/utils/fula-deposit.js'
 
+// Reaches a live third-party service. Set OMNIPIN_LIVE_TESTS=1 to run it.
+const live = Boolean(process.env.OMNIPIN_LIVE_TESTS)
+
 // A throwaway, well-known test private key (Hardhat account #0). Used only to
 // derive a signer address for amount-validation tests; no transaction is sent.
 const TEST_PK =
@@ -80,6 +83,7 @@ describe('Fula deposit', () => {
 
   describe('chain auto-detection', () => {
     it('detects the chain where the owner holds $FULA (vault holds it on Base)', {
+      skip: !live,
       timeout: 20_000,
     }, async () => {
       // The Fula vault holds $FULA on Base and none on Ethereum, so it is a

@@ -6,6 +6,9 @@ import { getEnsResolver } from '../../src/utils/ens/get-resolver.js'
 import { resolveEnsName } from '../../src/utils/ens/resolve-name.js'
 import { chainToRpcUrl, prepareUpdateEnsArgs } from '../../src/utils/ens.js'
 
+// Reaches a live third-party service. Set OMNIPIN_LIVE_TESTS=1 to run it.
+const live = Boolean(process.env.OMNIPIN_LIVE_TESTS)
+
 describe('ens utils', () => {
   describe('prepareUpdateEnsArgs', () => {
     it('should properly encode a valid IPFS CIDv1', () => {
@@ -83,7 +86,7 @@ describe('ens utils', () => {
   })
   describe('Universal Resolver', () => {
     describe('resolveEnsName', () => {
-      it('should resolve .eth names', async () => {
+      it('should resolve .eth names', { skip: !live }, async () => {
         const provider = Provider.from(fromHttp(chainToRpcUrl('mainnet')))
 
         const addr = await resolveEnsName({
@@ -93,7 +96,7 @@ describe('ens utils', () => {
 
         assert.equal(addr, '0x0fd2ca6b1a52a1153da0b31d02fd53854627d262')
       })
-      it('should work on sepolia', async () => {
+      it('should work on sepolia', { skip: !live }, async () => {
         const provider = Provider.from(fromHttp(chainToRpcUrl('sepolia')))
 
         const addr = await resolveEnsName({
@@ -105,7 +108,9 @@ describe('ens utils', () => {
       })
     })
     describe('getEnsResolver', () => {
-      it('should return a resolver address for a name', async () => {
+      it('should return a resolver address for a name', {
+        skip: !live,
+      }, async () => {
         const provider = Provider.from(fromHttp(chainToRpcUrl('mainnet')))
 
         const addr = await getEnsResolver({

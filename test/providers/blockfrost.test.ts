@@ -3,12 +3,17 @@ import { describe, it } from 'node:test'
 
 import { unpinOnBlockfrost } from '../../src/providers/ipfs/blockfrost.js'
 
+// Reaches a live third-party service. Set OMNIPIN_LIVE_TESTS=1 to run it.
+const live = Boolean(process.env.OMNIPIN_LIVE_TESTS)
+
 const hasToken = Boolean(process.env.OMNIPIN_BLOCKFROST_TOKEN)
 const TEST_CID = 'bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi'
 
 describe('Blockfrost', () => {
   describe('unpin', () => {
-    it('should throw DeployError with invalid token', async () => {
+    it('should throw DeployError with invalid token', {
+      skip: !live,
+    }, async () => {
       await assert.rejects(
         unpinOnBlockfrost({ token: 'bad-token', cid: TEST_CID }),
         /Failed to deploy on Blockfrost/,

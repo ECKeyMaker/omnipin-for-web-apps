@@ -4,9 +4,13 @@ import * as Provider from 'ox/Provider'
 import { fromHttp } from 'ox/RpcTransport'
 import { getBalance } from '../../src/utils/tx.js'
 
+// Reaches a live third-party service. Set OMNIPIN_LIVE_TESTS=1 to run it.
+const live = Boolean(process.env.OMNIPIN_LIVE_TESTS)
+
 describe('tx utils', () => {
   describe('getBalance', () => {
     it('returns a positive bigint for vitalik.eth on Ethereum mainnet', {
+      skip: !live,
       timeout: 15_000,
     }, async () => {
       const provider = Provider.from(

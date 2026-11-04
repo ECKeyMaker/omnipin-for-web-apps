@@ -6,7 +6,10 @@ CREATE TABLE IF NOT EXISTS connected_apps (
   origins TEXT NOT NULL,
   daily_bytes INTEGER NOT NULL,
   user_daily_deploys INTEGER NOT NULL,
-  active INTEGER NOT NULL DEFAULT 1
+  daily_sponsorships INTEGER NOT NULL DEFAULT 100,
+  active INTEGER NOT NULL DEFAULT 1,
+  -- Bump to replace this app's secret without touching any other app.
+  secret_version INTEGER NOT NULL DEFAULT 1
 );
 
 CREATE TABLE IF NOT EXISTS deployments (
@@ -17,7 +20,7 @@ CREATE TABLE IF NOT EXISTS deployments (
   cid TEXT NOT NULL,
   size INTEGER NOT NULL,
   car_key TEXT NOT NULL,
-  -- created, publishing, published, failed, rejected
+  -- created, publishing, published, failed, rejected, expired, removed
   status TEXT NOT NULL,
   providers TEXT NOT NULL DEFAULT '[]',
   ens_name TEXT,
@@ -33,3 +36,26 @@ CREATE TABLE IF NOT EXISTS deployments (
 CREATE INDEX IF NOT EXISTS deployments_app_day ON deployments (app_id, created_at);
 CREATE INDEX IF NOT EXISTS deployments_day ON deployments (created_at);
 CREATE INDEX IF NOT EXISTS deployments_retention ON deployments (retention_until);
+
+-- One row per gas approval, so daily gas spending can be capped.
+CREATE TABLE IF NOT EXISTS sponsorships (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  deployment_id TEXT NOT NULL,
+  app_id TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS sponsorships_day ON sponsorships (created_at);
+
+-- Append-only record of everything that spends from the pool or removes content.
+CREATE TABLE IF NOT EXISTS audit_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  at INTEGER NOT NULL,
+  actor TEXT NOT NULL,
+  app_id TEXT,
+  action TEXT NOT NULL,
+  deployment_id TEXT,
+  detail TEXT
+);
+
+CREATE INDEX IF NOT EXISTS audit_log_at ON audit_log (at);

@@ -10,6 +10,7 @@ type Env = GatewayEnv & {
   PAYMASTER_ADDRESS?: `0x${string}`
   PAYMASTER_SIGNER_KEY?: `0x${string}`
   MAX_COST_PER_OP?: string
+  ADMIN_SECRET?: string
 }
 
 const gateway = createGateway<Env>({
@@ -24,6 +25,7 @@ const gateway = createGateway<Env>({
   }),
   rpcUrl: (env) => env.RPC_URL,
   chainId: 11155111,
+  adminSecret: (env) => env.ADMIN_SECRET ?? '',
   funding: (env) => {
     if (!env.PAYMASTER_ADDRESS || !env.PAYMASTER_SIGNER_KEY)
       throw new Error('Public funding is not configured')
@@ -37,9 +39,10 @@ const gateway = createGateway<Env>({
     maxCarBytes: 100_000_000,
     globalDailyBytes: 5_000_000_000,
     retentionDays: 90,
+    dailySponsorships: 500,
   },
 })
 
 export const DeployWorkflow = gateway.Workflow
 
-export default { fetch: gateway.fetch }
+export default { fetch: gateway.fetch, scheduled: gateway.scheduled }

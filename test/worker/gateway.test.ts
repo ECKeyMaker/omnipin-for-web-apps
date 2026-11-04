@@ -74,11 +74,28 @@ let handle: ReturnType<typeof createGatewayHandler<typeof env>>
 
 const addApp = (
   id: string,
-  { dailyBytes = 20 * MB, userDeploys = 3, active = 1 } = {},
+  {
+    dailyBytes = 20 * MB,
+    userDeploys = 3,
+    active = 1,
+    dailySponsorships = 50,
+  } = {},
 ) =>
   env.DB.sqlite
-    .prepare('INSERT INTO connected_apps VALUES (?, ?, ?, ?, ?, ?)')
-    .run(id, id, JSON.stringify([ORIGIN]), dailyBytes, userDeploys, active)
+    .prepare(
+      `INSERT INTO connected_apps
+         (id, name, origins, daily_bytes, user_daily_deploys, daily_sponsorships, active)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      id,
+      id,
+      JSON.stringify([ORIGIN]),
+      dailyBytes,
+      userDeploys,
+      dailySponsorships,
+      active,
+    )
 
 const token = async (appId = 'app', userId = 'alice') =>
   createSessionToken({
@@ -625,5 +642,262 @@ describe('errors', () => {
       env,
     )
     assert.strictEqual(res.status, 404)
+  })
+})
+
+describe('sponsorship budget', () => {
+  const approved = (results: { json: { result?: unknown } }[]) =>
+    results.filter((r) => r.json.result).length
+
+  it('caps approvals per app per day', async () => {
+    addApp('tiny', { dailySponsorships: 1, userDeploys: 10 })
+    const auth = await token('tiny')
+    const ids = []
+    for (let i = 0; i < 2; i++) {
+      const { id } = await created(auth, { ...site, ens: 'site.eth' })
+      env.DB.sqlite
+        .prepare("UPDATE deployments SET status = 'published' WHERE id = ?")
+        .run(id)
+      ids.push(id)
+    }
+
+    const results = []
+    for (const id of ids) {
+      const url = (await call(`/${id}/sponsorship`, { auth })).json.paymasterUrl
+      results.push(await paymasterCall(id, { url }))
+    }
+
+    assert.strictEqual(approved(results), 1)
+    assert.match(results[1].json.error.message, /budget/)
+  })
+
+  it('caps approvals across all apps, even in a burst', async () => {
+    handle = createGatewayHandler({
+      ...config,
+      limits: { ...config.limits, dailySponsorships: 2, sponsorAttempts: 50 },
+    })
+    const id = await publish()
+    const url = (await call(`/${id}/sponsorship`)).json.paymasterUrl
+    const results = await Promise.all(
+      Array.from({ length: 8 }, () => paymasterCall(id, { url })),
+    )
+    assert.strictEqual(approved(results), 2)
+  })
+
+  it('refuses a suspended app even with a valid token', async () => {
+    const id = await publish()
+    const url = (await call(`/${id}/sponsorship`)).json.paymasterUrl
+    env.DB.sqlite.exec("UPDATE connected_apps SET active = 0 WHERE id = 'app'")
+    const { json } = await paymasterCall(id, { url })
+    assert.match(json.error.message, /not active/)
+  })
+
+  it('records approvals in the audit log', async () => {
+    const id = await publish()
+    await paymasterCall(id)
+    const entry = env.DB.sqlite
+      .prepare("SELECT * FROM audit_log WHERE action = 'sponsorship.approved'")
+      .get() as { deployment_id: string; detail: string }
+    assert.strictEqual(entry.deployment_id, id)
+    assert.strictEqual(entry.detail, op().sender)
+  })
+})
+
+describe('rate limiting', () => {
+  it('limits authenticated routes', async () => {
+    const keys: string[] = []
+    ;(env as typeof env & { RATE_LIMITER: unknown }).RATE_LIMITER = {
+      limit: async ({ key }: { key: string }) => {
+        keys.push(key)
+        return { success: false }
+      },
+    }
+    assert.strictEqual((await call('/', { body: site })).res.status, 429)
+    assert.deepStrictEqual(keys, ['app:alice'])
+  })
+
+  it('limits the paymaster by deployment', async () => {
+    const id = await publish()
+    const url = (await call(`/${id}/sponsorship`)).json.paymasterUrl
+    ;(env as typeof env & { RATE_LIMITER: unknown }).RATE_LIMITER = {
+      limit: async () => ({ success: false }),
+    }
+    assert.strictEqual((await paymasterCall(id, { url })).res.status, 429)
+  })
+})
+
+describe('removing a site', () => {
+  it('lets an owner remove their own site', async () => {
+    const id = await publish()
+    const { json } = await call(`/${id}/remove`)
+    assert.strictEqual(json.status, 'removed')
+    const entry = env.DB.sqlite
+      .prepare(
+        "SELECT actor FROM audit_log WHERE action = 'deployment.removed'",
+      )
+      .get() as { actor: string }
+    assert.strictEqual(entry.actor, 'alice')
+  })
+
+  it('does not let anyone else remove it', async () => {
+    const id = await publish()
+    const { res } = await call(`/${id}/remove`, {
+      auth: await token('app', 'bob'),
+    })
+    assert.strictEqual(res.status, 404)
+  })
+
+  it('refuses a site that was never published', async () => {
+    const { id } = await created()
+    assert.strictEqual((await call(`/${id}/remove`)).res.status, 409)
+  })
+})
+
+describe('admin API', () => {
+  const ADMIN = 'admin-secret'
+  const admin = (
+    path: string,
+    init: { method?: string; body?: unknown; auth?: string } = {},
+  ) =>
+    call(`/admin${path}`, {
+      method: init.method ?? 'POST',
+      body: init.body,
+      auth: init.auth ?? ADMIN,
+      origin: null,
+    })
+
+  beforeEach(() => {
+    handle = createGatewayHandler({ ...config, adminSecret: () => ADMIN })
+  })
+
+  const newApp = {
+    id: 'new-app',
+    name: 'New',
+    origins: [ORIGIN],
+    dailyBytes: MB,
+    userDailyDeploys: 2,
+    dailySponsorships: 2,
+  }
+
+  it('is switched off by default', async () => {
+    handle = createGatewayHandler(config)
+    const { res } = await admin('/audit', { method: 'GET' })
+    assert.strictEqual(res.status, 404)
+  })
+
+  it('rejects a wrong secret, and session tokens', async () => {
+    assert.strictEqual(
+      (await admin('/audit', { method: 'GET', auth: 'wrong' })).res.status,
+      401,
+    )
+    assert.strictEqual(
+      (await admin('/audit', { method: 'GET', auth: await token() })).res
+        .status,
+      401,
+    )
+  })
+
+  it('gives browsers no CORS access', async () => {
+    const res = await handle(
+      new Request(`https://gateway.example${BASE}/admin/audit`, {
+        method: 'OPTIONS',
+        headers: { Origin: ORIGIN },
+      }),
+      env,
+    )
+    assert.strictEqual(res.headers.get('Access-Control-Allow-Origin'), null)
+  })
+
+  it('registers an app whose secret works', async () => {
+    const { res, json } = await admin('/apps', { body: newApp })
+    assert.strictEqual(res.status, 201)
+
+    const auth = await createSessionToken({
+      appId: 'new-app',
+      userId: 'alice',
+      secret: json.secret,
+    })
+    await created(auth)
+  })
+
+  it('refuses duplicates and malformed apps', async () => {
+    await admin('/apps', { body: newApp })
+    assert.strictEqual((await admin('/apps', { body: newApp })).res.status, 409)
+    for (const bad of [
+      { ...newApp, id: 'NOT VALID' },
+      { ...newApp, id: 'x', origins: ['not-a-url'] },
+      { ...newApp, id: 'x', origins: ['https://a.test/path'] },
+      { ...newApp, id: 'x', dailyBytes: 0 },
+    ])
+      assert.strictEqual((await admin('/apps', { body: bad })).res.status, 400)
+  })
+
+  it('rotates one app without affecting others', async () => {
+    addApp('other')
+    const oldSession = await token()
+    const otherSession = await token('other')
+
+    const { json } = await admin('/apps/app/rotate')
+
+    assert.strictEqual(
+      (await call('/', { body: site, auth: oldSession })).res.status,
+      401,
+    )
+    await created(otherSession)
+    await created(
+      await createSessionToken({
+        appId: 'app',
+        userId: 'alice',
+        secret: json.secret,
+      }),
+    )
+  })
+
+  it('suspends and resumes an app', async () => {
+    await admin('/apps/app/suspend')
+    assert.strictEqual((await call('/', { body: site })).res.status, 403)
+    await admin('/apps/app/resume')
+    await created()
+  })
+
+  it('takes down any site, recording why', async () => {
+    const id = await publish()
+    assert.strictEqual(
+      (await admin(`/deployments/${id}/remove`, { body: {} })).res.status,
+      400,
+    )
+    const { json } = await admin(`/deployments/${id}/remove`, {
+      body: { reason: 'phishing report #12' },
+    })
+    assert.strictEqual(json.status, 'removed')
+
+    const { json: log } = await admin('/audit', { method: 'GET' })
+    assert.ok(
+      log.entries.some((e: { action: string }) =>
+        e.action.includes('phishing report #12'),
+      ),
+    )
+  })
+
+  it('renews a site, restoring an expired one', async () => {
+    const id = await publish()
+    env.DB.sqlite
+      .prepare(
+        "UPDATE deployments SET status = 'expired', retention_until = 1 WHERE id = ?",
+      )
+      .run(id)
+
+    const before = Date.now()
+    const { json } = await admin(`/deployments/${id}/renew`, {
+      body: { days: 30 },
+    })
+
+    assert.ok(json.retentionUntil >= before + 30 * 86_400_000)
+    const { json: status } = await call(`/${id}`, { method: 'GET' })
+    assert.strictEqual(status.status, 'published')
+  })
+
+  it('leaves unknown admin paths at 404', async () => {
+    assert.strictEqual((await admin('/nope')).res.status, 404)
   })
 })

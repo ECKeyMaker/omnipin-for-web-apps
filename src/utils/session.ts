@@ -27,13 +27,14 @@ const hmacKey = (secret: string, usage: 'sign' | 'verify') =>
 export const deriveAppSecret = async (
   masterSecret: string,
   appId: string,
+  version = 1,
 ): Promise<string> =>
   toBase64Url(
     new Uint8Array(
       await crypto.subtle.sign(
         'HMAC',
         await hmacKey(masterSecret, 'sign'),
-        textEncoder.encode(`omnipin-app:${appId}`),
+        textEncoder.encode(`omnipin-app:${version}:${appId}`),
       ),
     ),
   )

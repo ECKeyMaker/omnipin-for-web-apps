@@ -28,10 +28,17 @@ export type WorkflowBinding = {
   create: (options: { id: string; params: { id: string } }) => Promise<unknown>
 }
 
+/** Cloudflare's Rate Limiting binding. */
+export type RateLimitBinding = {
+  limit: (options: { key: string }) => Promise<{ success: boolean }>
+}
+
 export type GatewayEnv = {
   DB: D1Database
   CARS: R2Bucket
   DEPLOY_WORKFLOW: WorkflowBinding
+  /** Optional. Limits each user, and each paymaster token, per minute. */
+  RATE_LIMITER?: RateLimitBinding
 }
 
 export type PublicFunding = {
@@ -66,6 +73,8 @@ export type GatewayConfig<E extends GatewayEnv = GatewayEnv> = {
   /** Gas sponsorship. Omit to have users pay their own gas. */
   funding?: (env: E) => PublicFunding
   dnslink?: (env: E) => { apiKey: string; zoneId: string }
+  /** Enables the admin API. Leave unset to keep it switched off. */
+  adminSecret?: (env: E) => string
   /**
    * Whether a user may point a DNSLink hostname at their site. Denied unless
    * set, because otherwise any user could repoint any name in the zone.
@@ -84,5 +93,12 @@ export type GatewayConfig<E extends GatewayEnv = GatewayEnv> = {
     retentionDays: number
     /** Sponsorship approvals allowed per deployment. */
     sponsorAttempts?: number
+    /** Gas approvals per day across every connected app. */
+    dailySponsorships?: number
+    /**
+     * Unpin sites once their retention ends. Off by default: expired sites are
+     * only marked, because unpinning takes public content offline.
+     */
+    unpinExpired?: boolean
   }
 }

@@ -87,7 +87,8 @@ const run = (providers: string[], extra?: Partial<GatewayConfig<Env>>) => {
 beforeEach(() => {
   ;({ env } = createEnv())
   env.DB.sqlite.exec(`
-    INSERT INTO connected_apps VALUES ('app', 'app', '[]', 1, 1, 1);
+    INSERT INTO connected_apps (id, name, origins, daily_bytes, user_daily_deploys)
+    VALUES ('app', 'app', '[]', 1, 1);
     INSERT INTO deployments
       (id, app_id, user_id, name, cid, size, car_key, status, retention_until, created_at)
     VALUES ('1', 'app', 'u', 'site', '${CID}', ${bytes.length}, '${car}', 'publishing', 0, 0);

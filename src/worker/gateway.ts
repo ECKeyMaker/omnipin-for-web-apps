@@ -11,6 +11,13 @@ import {
   verifySessionToken,
 } from '../utils/session.js'
 import {
+  adminRoutes,
+  audit,
+  HttpError,
+  json,
+  unpinDeployment,
+} from './admin.js'
+import {
   approveOperation,
   ENTRY_POINT,
   maxCost,
@@ -24,20 +31,14 @@ const DAY_MS = 86_400_000
 const UPLOAD_URL_LIFETIME = 900
 const SPONSOR_TOKEN_LIFETIME = 600
 
-class HttpError extends Error {
-  status: number
-  constructor(status: number, message: string) {
-    super(message)
-    this.status = status
-  }
-}
-
-type App = {
+export type App = {
   id: string
   origins: string
   daily_bytes: number
   user_daily_deploys: number
+  daily_sponsorships: number
   active: number
+  secret_version: number
 }
 
 export type DeploymentRow = {
@@ -71,12 +72,6 @@ const isCIDv1 = (cid: unknown): cid is string => {
   }
 }
 
-const json = (body: unknown, status = 200, headers: HeadersInit = {}) =>
-  new Response(JSON.stringify(body), {
-    status,
-    headers: { 'Content-Type': 'application/json', ...headers },
-  })
-
 const publicView = (d: DeploymentRow) => ({
   id: d.id,
   name: d.name,
@@ -101,8 +96,14 @@ const readJson = async (request: Request): Promise<Record<string, unknown>> => {
 export const createGatewayHandler = <E extends GatewayEnv>(
   config: GatewayConfig<E>,
 ) => {
-  const secretFor = (env: E) => (appId: string) =>
-    deriveAppSecret(config.masterSecret(env), appId)
+  // A session for an unknown app must still fail normally, so this derives a
+  // secret regardless rather than throwing.
+  const secretFor = (env: E) => async (appId: string) =>
+    deriveAppSecret(
+      config.masterSecret(env),
+      appId,
+      (await loadApp(env, appId))?.secret_version ?? 1,
+    )
 
   const authenticate = async (request: Request, env: E): Promise<Session> => {
     const token = request.headers.get('Authorization')?.replace(/^Bearer /, '')
@@ -113,7 +114,13 @@ export const createGatewayHandler = <E extends GatewayEnv>(
     // A scoped token exists to be handed to a wallet, so it must not work as
     // a full session.
     if (!session || session.scope) throw new HttpError(401, 'Invalid session')
+    await rateLimit(env, `${session.app}:${session.sub}`)
     return session
+  }
+
+  const rateLimit = async (env: E, key: string) => {
+    if (env.RATE_LIMITER && !(await env.RATE_LIMITER.limit({ key })).success)
+      throw new HttpError(429, 'Too many requests')
   }
 
   const loadApp = (env: E, id: string) =>
@@ -199,6 +206,14 @@ export const createGatewayHandler = <E extends GatewayEnv>(
 
     if (!meta.changes) throw new HttpError(429, 'Daily quota reached')
 
+    await audit(env, {
+      actor: session.sub,
+      app: session.app,
+      action: 'deployment.created',
+      deployment: id,
+      detail: `${size} bytes`,
+    })
+
     const r2 = config.r2(env)
     const uploadUrl = await presignPut({
       apiUrl: `${r2.accountId}.r2.cloudflarestorage.com`,
@@ -239,6 +254,13 @@ export const createGatewayHandler = <E extends GatewayEnv>(
       .bind(id)
       .run()
     if (!meta.changes) throw new HttpError(409, 'Deployment already started')
+
+    await audit(env, {
+      actor: session.sub,
+      app: session.app,
+      action: 'deployment.started',
+      deployment: id,
+    })
 
     await env.DEPLOY_WORKFLOW.create({ id, params: { id } })
     return json({ id, status: 'publishing' }, 202)
@@ -304,6 +326,8 @@ export const createGatewayHandler = <E extends GatewayEnv>(
     if (session?.scope !== `sponsor:${id}`)
       throw new HttpError(401, 'Invalid sponsorship token')
 
+    await rateLimit(env, `sponsor:${id}`)
+
     const funding = config.funding?.(env)
     if (!funding) return fail('Sponsorship is disabled')
 
@@ -352,6 +376,38 @@ export const createGatewayHandler = <E extends GatewayEnv>(
       .run()
     if (!meta.changes) return fail('Sponsorship attempts used up')
 
+    const app = await loadApp(env, session.app)
+    if (!app?.active) return fail('App is not active')
+
+    const dayStart = Date.now() - DAY_MS
+
+    // One statement, so a burst can't overrun the daily gas budget.
+    const { meta: budget } = await env.DB.prepare(
+      `INSERT INTO sponsorships (deployment_id, app_id, created_at)
+       SELECT ?1, ?2, ?3
+       WHERE (SELECT COUNT(*) FROM sponsorships
+              WHERE app_id = ?2 AND created_at >= ?4) < ?5
+         AND (SELECT COUNT(*) FROM sponsorships WHERE created_at >= ?4) < ?6`,
+    )
+      .bind(
+        id,
+        session.app,
+        Date.now(),
+        dayStart,
+        app.daily_sponsorships,
+        config.limits.dailySponsorships ?? 1000,
+      )
+      .run()
+    if (!budget.changes) return fail('Daily sponsorship budget reached')
+
+    await audit(env, {
+      actor: session.sub,
+      app: session.app,
+      action: 'sponsorship.approved',
+      deployment: id,
+      detail: op.sender,
+    })
+
     return reply(
       approveOperation({
         op,
@@ -391,6 +447,19 @@ export const createGatewayHandler = <E extends GatewayEnv>(
     return json({ confirmed })
   }
 
+  /** Take a user's own site down. It can't recall copies held elsewhere. */
+  const removeOwn = async (env: E, id: string, session: Session) => {
+    const deployment = await loadOwn(env, id, session)
+    if (deployment.status !== 'published' && deployment.status !== 'expired')
+      throw new HttpError(409, `Deployment is ${deployment.status}`)
+
+    const results = await unpinDeployment(env, config, deployment, {
+      actor: session.sub,
+      action: 'deployment.removed',
+    })
+    return json({ id, status: 'removed', providers: results })
+  }
+
   const corsHeaders = async (
     request: Request,
     env: E,
@@ -401,6 +470,9 @@ export const createGatewayHandler = <E extends GatewayEnv>(
       'Access-Control-Allow-Headers': 'Authorization, Content-Type',
       Vary: 'Origin',
     }
+
+    // The admin API is for scripts, so browsers get no CORS access to it.
+    if (path.startsWith('/admin')) return {}
 
     // Wallet backends call this from origins no connected app can list. The
     // token in its URL is the credential, not cookies or the origin.
@@ -453,6 +525,8 @@ export const createGatewayHandler = <E extends GatewayEnv>(
     const [id, action, sub] = path.split('/').filter(Boolean)
     const { method } = request
 
+    if (id === 'admin') return adminRoutes(request, env, path, config)
+
     if (!id && method === 'POST')
       return create(request, env, await authenticate(request, env))
 
@@ -470,6 +544,7 @@ export const createGatewayHandler = <E extends GatewayEnv>(
         return sponsorship(request, env, id, session)
       if (action === 'ens' && sub === 'verify')
         return verifyEns(env, id, session)
+      if (action === 'remove' && !sub) return removeOwn(env, id, session)
     }
 
     throw new HttpError(404, 'Not found')

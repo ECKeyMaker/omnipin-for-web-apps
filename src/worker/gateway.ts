@@ -289,7 +289,9 @@ export const createGatewayHandler = <E extends GatewayEnv>(
     const { to, data } = await prepareUpdate(env, deployment)
     const call = { to, data }
 
-    if (!config.funding) return json({ call, sponsored: false })
+    const { chainId } = config
+
+    if (!config.funding) return json({ call, chainId, sponsored: false })
 
     const token = await createSessionToken({
       appId: session.app,
@@ -305,7 +307,7 @@ export const createGatewayHandler = <E extends GatewayEnv>(
     return json({
       call,
       sponsored: true,
-      chainId: config.chainId,
+      chainId,
       paymasterUrl: url.toString(),
     })
   }

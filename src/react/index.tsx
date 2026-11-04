@@ -14,6 +14,7 @@ import {
   type SiteFile,
   type SiteLimits,
 } from '../client/index.js'
+import type { Address } from 'ox/Address'
 import { fileSize } from '../utils/format.js'
 import type { WalletProvider } from '../utils/signer.js'
 
@@ -25,6 +26,7 @@ type EnsState =
   | { step: 'confirming'; sponsored: boolean }
   | { step: 'confirmed'; sponsored: boolean }
   | { step: 'pending'; sponsored: boolean }
+  | { step: 'proposed'; queueUrl: string }
 
 type State = {
   stage: DeployStage | 'idle'
@@ -110,7 +112,7 @@ export const useDeploy = ({ limits, ...options }: UseDeployOptions) => {
    * the wallet can use it.
    */
   const updateEns = useCallback(
-    async (wallet: WalletProvider) => {
+    async (wallet: WalletProvider, { safe }: { safe?: Address } = {}) => {
       const id = state.deployment?.id
       if (!id) return
 
@@ -118,7 +120,18 @@ export const useDeploy = ({ limits, ...options }: UseDeployOptions) => {
 
       try {
         const account = await connectWallet(wallet)
-        const { sponsored } = await client.updateEns(id, { wallet, account })
+        const { sponsored, queueUrl } = await client.updateEns(id, {
+          wallet,
+          account,
+          safe,
+        })
+
+        // A proposal has to wait for other people, so there's nothing to poll.
+        if (queueUrl) {
+          setState((s) => ({ ...s, ens: { step: 'proposed', queueUrl } }))
+          return
+        }
+
         setState((s) => ({ ...s, ens: { step: 'confirming', sponsored } }))
 
         const confirmed = await client.confirmEns(id)
@@ -152,6 +165,7 @@ const ENS_LABELS: Record<Exclude<EnsState['step'], 'idle'>, string> = {
   confirming: 'Waiting for the transaction…',
   confirmed: 'ENS name updated',
   pending: 'Still waiting for the transaction. It may take a while to land.',
+  proposed: 'Proposed to your Safe. Other owners still need to approve it.',
 }
 
 const percent = ({ done, total }: PackProgress) =>
@@ -162,6 +176,8 @@ export type DeployPanelProps = UseDeployOptions & {
   ens?: boolean
   /** EIP-1193 provider. Defaults to the browser's injected wallet. */
   wallet?: WalletProvider
+  /** Update ENS through this Safe instead of directly. */
+  safe?: Address
   onDeployed?: (deployment: DeploymentStatus) => void
 }
 
@@ -175,6 +191,7 @@ const injectedWallet = () =>
 export const DeployPanel = ({
   ens: offerEns,
   wallet,
+  safe,
   onDeployed,
   ...options
 }: DeployPanelProps) => {
@@ -334,6 +351,11 @@ export const DeployPanel = ({
           </a>
         )}
         {ens.step !== 'idle' && <p>{ENS_LABELS[ens.step]}</p>}
+        {ens.step === 'proposed' && (
+          <a href={ens.queueUrl} rel="noreferrer" target="_blank">
+            Open the Safe queue
+          </a>
+        )}
         {ens.step === 'confirmed' && (
           <p>
             {ens.sponsored
@@ -345,7 +367,7 @@ export const DeployPanel = ({
 
       {showEns &&
         (availableWallet ? (
-          <button type="button" onClick={() => updateEns(availableWallet)}>
+          <button type="button" onClick={() => updateEns(availableWallet, { safe })}>
             Point {deployment.ens?.name} at this site
           </button>
         ) : (

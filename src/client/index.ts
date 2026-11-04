@@ -1,6 +1,13 @@
 import type { Address } from 'ox/Address'
 import type { Hex } from 'ox/Hex'
-import type { WalletProvider } from '../utils/signer.js'
+import type { Provider } from 'ox/Provider'
+import { proposeEnsUpdate } from '../ens.js'
+import type { ChainName } from '../types.js'
+import {
+  type Signer,
+  type WalletProvider,
+  walletSigner,
+} from '../utils/signer.js'
 import type { SiteFile } from './files.js'
 import { type PackedSite, type PackProgress, packSite } from './pack.js'
 
@@ -45,14 +52,15 @@ export type DeployClientOptions = {
   pollInterval?: number
 }
 
-type EnsPlan =
-  | { call: { to: Address; data: Hex }; sponsored: false }
-  | {
-      call: { to: Address; data: Hex }
-      sponsored: true
-      chainId: number
-      paymasterUrl: string
-    }
+type EnsPlan = { call: { to: Address; data: Hex }; chainId: number } & (
+  | { sponsored: false }
+  | { sponsored: true; paymasterUrl: string }
+)
+
+const CHAIN_NAMES: Record<number, ChainName> = {
+  1: 'mainnet',
+  11155111: 'sepolia',
+}
 
 export type DeployOptions = {
   name: string
@@ -235,15 +243,48 @@ export const createDeployClient = ({
    * Point the deployment's ENS name at it. The public pool pays the gas when
    * the wallet supports sponsorship; otherwise the wallet pays as usual.
    *
+   * With `safe`, this only proposes the update. Nothing changes until enough
+   * owners approve, and the gas for that isn't sponsored.
+   *
    * @returns Whether the gas was sponsored.
    */
   const updateEns = async (
     id: string,
-    { wallet, account }: { wallet: WalletProvider; account: Address },
-  ): Promise<{ sponsored: boolean; reference: string }> => {
+    {
+      wallet,
+      account,
+      safe,
+    }: {
+      wallet: WalletProvider
+      account: Address
+      /** Propose through this Safe, which `account` must be an owner of. */
+      safe?: Address
+    },
+  ): Promise<{
+    sponsored: boolean
+    reference: string
+    /** Set for a Safe: the update waits there for the other owners. */
+    queueUrl?: string
+  }> => {
     const plan = await request<EnsPlan>(`/${id}/sponsorship`, {
       method: 'POST',
     })
+
+    if (safe) {
+      const chainName = CHAIN_NAMES[plan.chainId]
+      if (!chainName) throw new Error(`Safe isn't supported on ${plan.chainId}`)
+
+      const signer: Signer = walletSigner({ wallet, address: account })
+      const { queueUrl, safeTxHash } = await proposeEnsUpdate({
+        signer,
+        provider: wallet as unknown as Provider,
+        update: { ...plan.call, node: '0x', contentHash: '0x' },
+        safe,
+        chainName,
+      })
+
+      return { sponsored: false, reference: safeTxHash, queueUrl }
+    }
 
     if (
       plan.sponsored &&

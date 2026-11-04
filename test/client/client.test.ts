@@ -134,6 +134,76 @@ describe('deploy', () => {
   })
 })
 
+describe('updateEns through a Safe', () => {
+  const safe = '0x00000000000000000000000000000000000000dd'
+
+  const safeWallet = () => {
+    const methods: string[] = []
+    return {
+      methods,
+      request: async ({ method }: { method: string }) => {
+        methods.push(method)
+        if (method === 'eth_signTypedData_v4') return `0x${'ab'.repeat(65)}`
+        return `0x${'00'.repeat(31)}07`
+      },
+    }
+  }
+
+  it('proposes with the owner’s wallet and sends no transaction', async () => {
+    const proposals: { sender: string; nonce: string }[] = []
+    respond((url, init) => {
+      if (url.includes('api.safe.global')) {
+        proposals.push(JSON.parse(init.body as string))
+        return new Response('', { status: 201 })
+      }
+      return Response.json({ call, chainId: 11155111, sponsored: false })
+    })
+    const w = safeWallet()
+
+    const result = await client().updateEns('1', {
+      wallet: w,
+      account,
+      safe,
+    })
+
+    assert.ok(result.queueUrl?.includes(safe))
+    assert.strictEqual(result.sponsored, false)
+    assert.ok(w.methods.includes('eth_signTypedData_v4'))
+    assert.ok(!w.methods.includes('eth_sendTransaction'))
+    assert.ok(!w.methods.includes('wallet_sendCalls'))
+    assert.strictEqual(proposals.length, 1)
+    assert.strictEqual(proposals[0].sender.toLowerCase(), account)
+    assert.strictEqual(proposals[0].nonce, '7')
+  })
+
+  it('does not sign if the update would revert', async () => {
+    respond(() => Response.json({ call, chainId: 1, sponsored: false }))
+    const methods: string[] = []
+    await assert.rejects(
+      client().updateEns('1', {
+        account,
+        safe,
+        wallet: {
+          request: async ({ method }: { method: string }) => {
+            methods.push(method)
+            throw new Error('execution reverted')
+          },
+        },
+      }),
+      /reverted/,
+    )
+    assert.ok(!methods.includes('eth_signTypedData_v4'))
+  })
+
+  it('refuses a chain Safe support doesn’t cover', async () => {
+    respond(() => Response.json({ call, chainId: 10, sponsored: false }))
+    await assert.rejects(
+      client().updateEns('1', { wallet: safeWallet(), account, safe }),
+      /isn't supported/,
+    )
+  })
+})
+
 describe('confirmEns', () => {
   it('resolves true once the chain matches', async () => {
     let checks = 0

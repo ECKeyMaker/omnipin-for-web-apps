@@ -1,13 +1,15 @@
-import { encodeData } from 'ox/AbiFunction'
 import { type Address, checksum, fromPublicKey } from 'ox/Address'
-import { type Hex, toBigInt } from 'ox/Hex'
+import type { Hex } from 'ox/Hex'
 import * as Provider from 'ox/Provider'
 import { fromHttp } from 'ox/RpcTransport'
 import { getPublicKey } from 'ox/Secp256k1'
-import { toHex } from 'ox/Signature'
 import { chains, isTTY } from '../constants.js'
 import { styleText } from '../deps.js'
-import { prepareEnsUpdate } from '../ens.js'
+import {
+  prepareEnsUpdate,
+  proposeEnsUpdate,
+  simulateEnsUpdate,
+} from '../ens.js'
 import { MissingCLIArgsError, MissingKeyError } from '../errors.js'
 import type { ChainName } from '../types.js'
 import { getExactAddress } from '../utils/address/getExactAddress.js'
@@ -15,23 +17,12 @@ import { resolveEnsName } from '../utils/ens/resolve-name.js'
 import { chainToRpcUrl, type EnsName } from '../utils/ens.js'
 import { assertCID } from '../utils/ipfs.js'
 import { logger } from '../utils/logger.js'
-import { getNonce } from '../utils/safe/constants.js'
 import {
   type EIP3770Address,
   getEip3770Address,
 } from '../utils/safe/eip3770.js'
-import { proposeTransaction } from '../utils/safe/propose.js'
-import { OperationType, type SafeTransactionData } from '../utils/safe/types.js'
-import {
-  generateSafeTransactionSignature,
-  prepareSafeTransactionData,
-} from '../utils/safe.js'
-import {
-  SIMULATION_GAS_LIMIT,
-  sendTransaction,
-  simulateTransaction,
-  waitForTransaction,
-} from '../utils/tx.js'
+import { privateKeySigner } from '../utils/signer.js'
+import { waitForTransaction } from '../utils/tx.js'
 
 export type EnsActionArgs = Partial<{
   chain: ChainName
@@ -83,6 +74,12 @@ export const ensAction = async ({
 
   if (options.verbose) console.log('Transaction encoded data:', data)
 
+  const signer = privateKeySigner({
+    privateKey: pk,
+    provider,
+    chainId: chain.id,
+  })
+
   if (safeAddress) {
     logger.info(
       `Preparing a transaction for Safe ${safeAddress} on ${chainName}`,
@@ -93,97 +90,42 @@ export const ensAction = async ({
       chainId: chain.id,
     })
 
-    // Surface revert reasons (wrong resolver, wrong chain, self-destructed
-    // contract, etc.) before the user signs anything, matching the EOA
-    // path below. `from` is the Safe address, so the simulation sees the
-    // call exactly as the multi-sig will eventually execute it.
-    await simulateTransaction({ provider, to: resolverAddress, data, from })
+    try {
+      const { safeTxHash } = await proposeEnsUpdate({
+        signer,
+        provider,
+        update,
+        safe: checksum(safe),
+        chainName,
+        dryRun,
+      })
 
-    const nonce = toBigInt(
-      await provider.request({
-        method: 'eth_call',
-        params: [
-          {
-            to: safe,
-            data: encodeData(getNonce),
-            gas: SIMULATION_GAS_LIMIT,
-          },
-          'latest',
-        ],
-      }),
-    )
-
-    if (options.verbose) logger.info(`Nonce: ${nonce}`)
-
-    const txData: SafeTransactionData = {
-      nonce,
-      operation: OperationType.Call,
-      to: resolverAddress,
-      data,
-      value: 0n,
+      logger.info(`Signed a Safe transaction with a hash ${safeTxHash}`)
+    } catch (e) {
+      // Re-throw so the CLI exits with a non-zero status. Swallowing this
+      // here made `omnipin ens` report success even when the Safe proposal
+      // never went through (e.g. in CI), masking real failures.
+      throw new Error('Failed to propose a transaction', { cause: e })
     }
 
-    const { safeTxHash } = await prepareSafeTransactionData({
-      txData,
-      safeAddress: from,
-      chainId: chain.id,
-      provider,
-    })
-
-    logger.info(`Signing a Safe transaction with a hash ${safeTxHash}`)
-
-    const senderSignature = await generateSafeTransactionSignature({
-      safeAddress: checksum(from),
-      txData,
-      chainId: chain.id,
-      privateKey: pk,
-    })
-
     if (!dryRun) {
-      if (options.verbose) logger.info('Proposing a Safe transaction')
-
-      try {
-        await proposeTransaction({
-          txData,
-          safeAddress: checksum(from),
-          safeTxHash,
-          senderSignature: toHex(senderSignature),
-          chainId: chain.id,
-          chainName: chainName,
-          address,
-        })
-        const safe = safeAddress.endsWith('.eth')
-          ? await resolveEnsName({ name: safeAddress, provider })
-          : safeAddress
-        const safeLink = `https://app.safe.global/transactions/queue?safe=${safe}`
-        logger.success(
-          `Transaction proposed to a Safe wallet.\nOpen in a browser: ${
-            isTTY ? styleText('underline', safeLink) : safeLink
-          }`,
-        )
-      } catch (e) {
-        // Re-throw so the CLI exits with a non-zero status. Swallowing this
-        // here made `omnipin ens` report success even when the Safe proposal
-        // never went through (e.g. in CI), masking real failures.
-        throw new Error('Failed to propose a transaction', { cause: e })
-      }
+      const resolved = safeAddress.endsWith('.eth')
+        ? await resolveEnsName({ name: safeAddress, provider })
+        : safeAddress
+      const safeLink = `https://app.safe.global/transactions/queue?safe=${resolved}`
+      logger.success(
+        `Transaction proposed to a Safe wallet.\nOpen in a browser: ${
+          isTTY ? styleText('underline', safeLink) : safeLink
+        }`,
+      )
     }
   } else {
-    await simulateTransaction({
-      provider,
-      to: resolverAddress,
-      data,
-      from,
-    })
+    await simulateEnsUpdate(provider, update, from)
 
     if (!dryRun) {
-      const hash = await sendTransaction({
-        privateKey: pk,
-        provider,
-        chainId: chain.id,
+      const hash = await signer.sendTransaction({
         to: resolverAddress,
         data,
-        from,
       })
 
       logger.info(

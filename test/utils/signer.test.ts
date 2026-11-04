@@ -2,11 +2,17 @@ import * as assert from 'node:assert'
 import { describe, it } from 'node:test'
 import type { Provider } from 'ox/Provider'
 import { recoverAddress } from 'ox/Secp256k1'
-import { fromHex } from 'ox/Signature'
+import { fromHex, toHex } from 'ox/Signature'
 import { getSignPayload } from 'ox/TypedData'
+import { OperationType } from '../../src/utils/safe/types.js'
+import {
+  generateSafeTransactionSignature,
+  safeTransactionTypedData,
+} from '../../src/utils/safe.js'
 import {
   privateKeySigner,
   serializeTypedData,
+  type TypedData,
   walletSigner,
 } from '../../src/utils/signer.js'
 
@@ -33,6 +39,32 @@ describe('signers', () => {
         signature: fromHex(signature),
       }),
       signer.address,
+    )
+  })
+
+  it('signs a Safe transaction exactly as the raw-key path does', async () => {
+    const privateKey = `0x${'11'.repeat(32)}` as const
+    const args = {
+      safeAddress: address,
+      chainId: 11155111,
+      txData: {
+        nonce: 7n,
+        operation: OperationType.Call,
+        to: address,
+        data: '0x12',
+        value: 0n,
+      },
+    } as const
+
+    const viaSigner = await privateKeySigner({
+      privateKey,
+      provider: {} as Provider,
+      chainId: 11155111,
+    }).signTypedData(safeTransactionTypedData(args) as unknown as TypedData)
+
+    assert.strictEqual(
+      viaSigner,
+      toHex(await generateSafeTransactionSignature({ ...args, privateKey })),
     )
   })
 

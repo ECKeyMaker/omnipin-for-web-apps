@@ -35,16 +35,19 @@ const register = (
   return name
 }
 
-const succeeds: UploadFunction = async () => ({ cid: CID, rID: 'deadbeef' })
+const succeeds: UploadFunction = async ({ cid }) => ({
+  cid: cid ?? CID,
+  rID: 'deadbeef',
+})
 const fails: UploadFunction = async () => {
   throw new Error('provider is down')
 }
 
 const recording = () => {
   const calls: { first: boolean }[] = []
-  const upload: UploadFunction = async ({ first }) => {
+  const upload: UploadFunction = async ({ first, cid }) => {
     calls.push({ first })
-    return { cid: CID }
+    return { cid }
   }
   return { calls, upload }
 }

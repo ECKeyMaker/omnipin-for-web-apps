@@ -1,6 +1,8 @@
+import '../providers/node.js'
+
 import { isTTY, PROVIDERS } from '../constants.js'
-import { AsciiBar } from '../deps.js'
 import { AllProvidersFailedError, NoProvidersError } from '../errors.js'
+import { AsciiBar } from '../utils/ascii-bar.js'
 import {
   findEnvVarProviderName,
   parseTokensFromEnv,

@@ -53,6 +53,15 @@ export class NoProvidersError extends Error {
   }
 }
 
+export class NoUploaderError extends Error {
+  name = 'NoUploaderError'
+  constructor() {
+    super(
+      'None of the selected providers can receive files. Add one that supports uploads.',
+    )
+  }
+}
+
 export class UnpinNotSupportedError extends Error {
   name = 'UnpinNotSupportedError'
   providerName: string

@@ -2,12 +2,13 @@ import * as assert from 'node:assert'
 import { describe, it } from 'node:test'
 
 import { PROVIDERS } from '../../src/constants.js'
-import { packCAR, walk } from '../../src/index.js'
 import {
   statusOnIpfsNinja,
   unpinOnIpfsNinja,
   uploadOnIpfsNinja,
 } from '../../src/providers/ipfs/ipfs-ninja.js'
+import { walk } from '../../src/utils/fs.js'
+import { packCAR } from '../../src/utils/pack-node.js'
 
 const { upload, status } = PROVIDERS.IPFS_NINJA_TOKEN
 const { unpin } = PROVIDERS.IPFS_NINJA_TOKEN

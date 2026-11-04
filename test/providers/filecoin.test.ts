@@ -1,7 +1,9 @@
 import { describe, it } from 'node:test'
 import { randomPrivateKey } from 'ox/Secp256k1'
-import { MissingKeyError, packCAR, walk } from '../../src/index.js'
+import { MissingKeyError } from '../../src/errors.js'
 import { uploadToFilecoin } from '../../src/providers/ipfs/filecoin.js'
+import { walk } from '../../src/utils/fs.js'
+import { packCAR } from '../../src/utils/pack-node.js'
 
 const [size, files] = await walk('./dist', false)
 const car = await packCAR(files, 'test.car')

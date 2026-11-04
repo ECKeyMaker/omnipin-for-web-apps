@@ -2,8 +2,9 @@ import * as assert from 'node:assert'
 import { describe, it } from 'node:test'
 import { CarReader } from '@ipld/car/reader'
 import * as dagPb from '@ipld/dag-pb'
-import type { CID } from 'multiformats/cid'
-import { assertCID, packCAR } from '../../src/utils/ipfs.js'
+import { CID } from 'multiformats/cid'
+import { assertCID, isSameCID, packFiles } from '../../src/utils/ipfs.js'
+import { packCAR } from '../../src/utils/pack-node.js'
 import { cases } from '../fixtures/unixfs-cases.js'
 
 const te = new TextEncoder()
@@ -33,6 +34,62 @@ const dfsOrder = async (reader: CarReader, root: CID) => {
 }
 
 describe('ipfs utils', () => {
+  describe('packFiles', () => {
+    it('produces the same CAR whatever order files arrive in', async () => {
+      const files = ['b.txt', 'a.txt', 'nested/c.txt'].map((path) => ({
+        path,
+        content: te.encode(path),
+      }))
+
+      const forward = await packFiles(files)
+      const reversed = await packFiles(files.toReversed())
+
+      assert.strictEqual(
+        forward.rootCID.toString(),
+        reversed.rootCID.toString(),
+      )
+      assert.deepStrictEqual(forward.bytes, reversed.bytes)
+    })
+
+    it('matches packCAR', async () => {
+      const files = [{ path: 'a.txt', content: te.encode('A') }]
+      const pure = await packFiles(structuredClone(files))
+      const node = await packCAR(structuredClone(files), 'parity')
+      assert.strictEqual(pure.rootCID.toString(), node.rootCID.toString())
+      assert.deepStrictEqual(pure.bytes, node.bytes)
+    })
+
+    it('does not reorder the array it was given', async () => {
+      const files = ['b', 'a'].map((path) => ({
+        path,
+        content: te.encode(path),
+      }))
+      await packFiles(files)
+      assert.deepStrictEqual(
+        files.map((f) => f.path),
+        ['b', 'a'],
+      )
+    })
+  })
+
+  describe('isSameCID', () => {
+    const v0 = 'QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG'
+    const v1 = CID.parse(v0).toV1().toString()
+    const other = 'bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi'
+
+    it('matches across CID versions', () => {
+      assert.strictEqual(isSameCID(v0, v1), true)
+    })
+
+    it('rejects different content', () => {
+      assert.strictEqual(isSameCID(v1, other), false)
+    })
+
+    it('does not treat a non-CID reply as a mismatch', () => {
+      assert.strictEqual(isSameCID('request-id-123', v1), true)
+    })
+  })
+
   describe('packCAR', () => {
     it('should pack files into a CAR and return bytes and rootCID', async () => {
       const files = [

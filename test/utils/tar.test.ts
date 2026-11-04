@@ -2,7 +2,7 @@ import * as assert from 'node:assert'
 import { Readable } from 'node:stream'
 import { describe, it } from 'node:test'
 import { parseTar } from 'nanotar'
-import { packTAR } from '../../src/utils/tar.js'
+import { packTAR } from '../../src/utils/pack-node.js'
 
 const te = new TextEncoder()
 

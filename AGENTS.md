@@ -11,6 +11,7 @@ pnpm install         # Install dependencies
 pnpm build           # Build with rslib to dist/
 pnpm types           # TypeScript type checking
 pnpm check           # Biome linter/formatter
+pnpm check:core      # After build: fail if Node built-ins reached dist/index.js
 pnpm test:report     # Run tests with coverage
 pnpm test            # Run all tests
 node --experimental-test-module-mocks --import ./test/register.ts --test path  # Run specific test file
@@ -160,6 +161,8 @@ OMNIPIN_AIOZ_TOKEN=api_key:api_secret
   /providers/swarm# Swarm providers (bee, swarmy)
   /utils          # Utility functions
   constants.ts    # Provider registry
+  deploy.ts       # Runtime-neutral deploy
+  index.ts        # Library entry point
   errors.ts       # Custom error classes
   types.ts        # Core type definitions
   cli.ts          # CLI entry point
@@ -181,6 +184,12 @@ dist/             # Build output
 
 ### Token Parsing
 Tokens are parsed in `src/utils/env.ts`. The `OMNIPIN_` prefix is stripped.
+
+### Runtime Boundaries
+`src/index.ts` is the runtime-neutral core for browsers and Cloudflare Workers. Nothing it reaches may import a `node:` module or use `process` unguarded.
+- Node-only code lives in `src/actions`, `src/cli.ts`, `src/utils/fs.ts` and `src/utils/pack-node.ts`
+- Providers that need Node are registered in `src/providers/node.ts`, not `src/constants.ts`
+- `src/deploy.ts` reports through its return value and `onEvent`, never the terminal
 
 ### Documentation
 Use `context7` tools to search docs when needed.

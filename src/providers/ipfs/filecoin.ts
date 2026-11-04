@@ -61,7 +61,9 @@ export async function findPiece(
   // Mirror the upstream Synapse SDK (@filoz/synapse-core RETRY_CONSTANTS):
   // poll every 4s, bounded by a 5-minute wall-clock timeout. Both are
   // overridable via env for slow SPs / large payloads.
-  const envTimeout = Number(process.env.OMNIPIN_FILECOIN_FINDPIECE_TIMEOUT_MS)
+  const envTimeout = Number(
+    globalThis.process?.env?.OMNIPIN_FILECOIN_FINDPIECE_TIMEOUT_MS,
+  )
   const {
     timeoutMs = Number.isFinite(envTimeout) && envTimeout > 0
       ? envTimeout

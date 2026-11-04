@@ -1,14 +1,10 @@
-import { writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
 import { CarWriter } from '@ipld/car/writer'
 import * as dagPb from '@ipld/dag-pb'
 import { base32 } from 'multiformats/bases/base32'
-import type { CID } from 'multiformats/cid'
+import { CID } from 'multiformats/cid'
 import { InvalidCIDError } from '../errors.js'
 import { MemoryBlockstore } from './ipfs/blockstore.js'
 import { type FileCandidate, importer } from './ipfs/unixfs.js'
-
-const tmp = tmpdir()
 
 const concatBytes = (chunks: Uint8Array[]): Uint8Array<ArrayBuffer> => {
   let total = 0
@@ -60,17 +56,22 @@ async function* walkDAG(
   }
 }
 
-export const packCAR = async (
-  files: FileCandidate[],
-  name: string,
-  dir = tmp,
-): Promise<{ bytes: Uint8Array<ArrayBuffer>; rootCID: CID }> => {
-  const output = `${dir}/${name}.car`
+const byPath = (a: FileCandidate, b: FileCandidate) => {
+  const [left, right] = [a.path ?? '', b.path ?? '']
+  return left < right ? -1 : left > right ? 1 : 0
+}
 
+/**
+ * Pack files into a CAR in memory. Input order never affects the result, so
+ * the same site produces the same CAR whichever source listed its files.
+ */
+export const packFiles = async (
+  files: FileCandidate[],
+): Promise<{ bytes: Uint8Array<ArrayBuffer>; rootCID: CID }> => {
   const blockstore = new MemoryBlockstore()
   let rootCID: CID | null = null
 
-  for await (const entry of importer(files, blockstore)) {
+  for await (const entry of importer(files.toSorted(byPath), blockstore)) {
     rootCID = entry.cid
   }
 
@@ -85,11 +86,7 @@ export const packCAR = async (
   const collecting = Array.fromAsync(out)
 
   for await (const block of walkDAG(rootCID, blockstore)) {
-    try {
-      await writer.put(block)
-    } catch (error) {
-      console.warn(`Failed to add block ${block.cid.toString()} to CAR:`, error)
-    }
+    await writer.put(block)
   }
 
   await writer.close()
@@ -102,8 +99,6 @@ export const packCAR = async (
   const bytes = concatBytes(carChunks)
   carChunks.length = 0
 
-  await writeFile(output, bytes)
-
   return { bytes, rootCID }
 }
 
@@ -114,5 +109,18 @@ export const assertCID = (cid: string) => {
     } catch {
       throw new InvalidCIDError(cid)
     }
+  }
+}
+
+/**
+ * Whether two CID strings name the same content, whatever their version or
+ * base. A provider's reply that isn't a CID can't be compared, so it doesn't
+ * count as a mismatch.
+ */
+export const isSameCID = (a: string, b: string): boolean => {
+  try {
+    return CID.parse(a).toV1().equals(CID.parse(b).toV1())
+  } catch {
+    return true
   }
 }

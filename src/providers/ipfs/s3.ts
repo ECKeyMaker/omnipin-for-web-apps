@@ -1,7 +1,7 @@
-import { uploadCar } from '@stauro/filebase-upload'
 import { DeployError } from '../../errors.js'
 import type { UploadArgs } from '../../types.js'
 import { logger } from '../../utils/logger.js'
+import { uploadCar } from '../../utils/s3.js'
 
 export const uploadOnS3 = async ({
   name,

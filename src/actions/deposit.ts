@@ -1,3 +1,5 @@
+import '../providers/node.js'
+
 import { type Address, fromPublicKey } from 'ox/Address'
 import { getPublicKey } from 'ox/Secp256k1'
 import { MissingCLIArgsError, UnknownProviderError } from '../errors.js'

@@ -3,9 +3,8 @@ import { isTTY } from '../constants.js'
 import { styleText } from '../deps.js'
 import { MissingDirectoryError } from '../errors.js'
 import { exists, fileSize, walk } from '../utils/fs.js'
-import { packCAR } from '../utils/ipfs.js'
 import { logger } from '../utils/logger.js'
-import { packTAR, tarOutputPath } from '../utils/tar.js'
+import { packCAR, packTAR, tarOutputPath } from '../utils/pack-node.js'
 
 export type PackActionArgs = Partial<{
   name: string

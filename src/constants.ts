@@ -14,10 +14,6 @@ import {
   uploadOnFilebase,
 } from './providers/ipfs/filebase.js'
 import {
-  statusOnFilecoin,
-  uploadToFilecoin,
-} from './providers/ipfs/filecoin.js'
-import {
   statusOnFula,
   unpinOnFula,
   uploadOnFula,
@@ -40,7 +36,6 @@ import { pinOnQuicknode } from './providers/ipfs/quicknode.js'
 import { uploadToSimplePage } from './providers/ipfs/simplepage.js'
 import { specPin, specStatus, specUnpin } from './providers/ipfs/spec.js'
 import { uploadOnBee } from './providers/swarm/bee.js'
-import { uploadOnHoverfly } from './providers/swarm/hoverfly.js'
 import { uploadOnSwarmy } from './providers/swarm/swarmy.js'
 import type {
   StatusFunction,
@@ -144,12 +139,6 @@ export const PROVIDERS: Record<
     supported: 'upload',
     protocol: 'swarm',
   },
-  HOVERFLY_TOKEN: {
-    name: 'Hoverfly',
-    upload: uploadOnHoverfly,
-    supported: 'upload',
-    protocol: 'swarm',
-  },
   BLOCKFROST_TOKEN: {
     name: 'Blockfrost',
     upload: pinOnBlockfrost,
@@ -171,13 +160,6 @@ export const PROVIDERS: Record<
     supported: 'upload',
     protocol: 'ipfs',
   },
-  FILECOIN_TOKEN: {
-    name: 'Filecoin',
-    upload: uploadToFilecoin,
-    status: statusOnFilecoin,
-    supported: 'both',
-    protocol: 'ipfs',
-  },
   AIOZ_TOKEN: {
     name: 'AIOZ',
     upload: pinOnAioz,
@@ -194,7 +176,7 @@ export const PROVIDERS: Record<
   },
 }
 
-export const isTTY = process.stdout.isTTY
+export { isTTY } from './deps.js'
 
 export const CLOUDFLARE_API_URL = 'https://api.cloudflare.com/client/v4'
 

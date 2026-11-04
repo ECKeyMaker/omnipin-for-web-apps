@@ -2,12 +2,13 @@ import * as assert from 'node:assert'
 import { describe, it } from 'node:test'
 
 import { PROVIDERS } from '../../src/constants.js'
-import { packCAR, walk } from '../../src/index.js'
 import {
   statusOnFula,
   unpinOnFula,
   uploadOnFula,
 } from '../../src/providers/ipfs/fula.js'
+import { walk } from '../../src/utils/fs.js'
+import { packCAR } from '../../src/utils/pack-node.js'
 
 const { upload, status, unpin } = PROVIDERS.FULA_TOKEN
 const token = process.env.OMNIPIN_FULA_TOKEN!

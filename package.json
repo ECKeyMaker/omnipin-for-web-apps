@@ -33,7 +33,7 @@
 		"varint": "^6.0.0"
 	},
 	"bin": {
-		"omnipin": "dist/index.js"
+		"omnipin": "dist/cli.js"
 	},
 	"description": "🌸 Self-custodial decentralized deployments",
 	"engineStrict": true,
@@ -64,14 +64,27 @@
 		"types": "tsc --noEmit",
 		"test": "node --experimental-test-module-mocks --import ./test/register.ts --test 'test/**/*.test.ts'",
 		"test:report": "mkdir -p coverage && node --experimental-test-module-mocks --import ./test/register.ts --test --experimental-test-coverage --test-coverage-include='src/**' --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=coverage/lcov.info 'test/**/*.test.ts'",
-		"test:e2e": "node --import ./test/register.ts --test 'e2e/**/*.test.ts'"
+		"test:e2e": "node --import ./test/register.ts --test 'e2e/**/*.test.ts'",
+		"check:core": "node scripts/check-core.ts"
 	},
 	"size-limit": [
+		{
+			"path": "dist/cli.js",
+			"limit": "1MB",
+			"brotli": false
+		},
 		{
 			"path": "dist/index.js",
 			"limit": "1MB",
 			"brotli": false
 		}
 	],
-	"type": "module"
+	"type": "module",
+	"types": "./dist/index.d.ts",
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"import": "./dist/index.js"
+		}
+	}
 }

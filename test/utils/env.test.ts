@@ -1,3 +1,4 @@
+import '../../src/providers/node.js'
 import * as assert from 'node:assert'
 import { afterEach, describe, it } from 'node:test'
 import { MissingKeyError } from '../../src/errors.js'

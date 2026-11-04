@@ -1,7 +1,6 @@
-import type { ReadStream } from 'node:fs'
 import type { FileCandidate } from './utils/ipfs/unixfs.js'
 
-export interface FileEntry extends FileCandidate<ReadStream> {
+export interface FileEntry extends FileCandidate {
   size: number
   path: string
 }

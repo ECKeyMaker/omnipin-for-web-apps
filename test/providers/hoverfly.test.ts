@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { describe, it } from 'node:test'
 import { createTar } from 'nanotar'
 
+import '../../src/providers/node.js'
 import { PROVIDERS } from '../../src/constants.js'
 import { PinningNotSupportedError } from '../../src/errors.js'
 import {

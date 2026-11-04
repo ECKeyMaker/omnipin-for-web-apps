@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import './providers/node.js'
 
 import { CLI } from 'spektr'
 import { colorPlugin } from 'spektr/plugins/color.js'

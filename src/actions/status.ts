@@ -1,3 +1,5 @@
+import '../providers/node.js'
+
 import { PROVIDERS } from '../constants.js'
 import {
   AllProvidersFailedError,

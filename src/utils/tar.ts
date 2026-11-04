@@ -1,23 +1,15 @@
-import { writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
 import { createTar, type TarFileItem } from 'nanotar'
 import type { FileEntry } from '../types.js'
 
-const tmp = tmpdir()
-
-/** Path of the archive `packTAR` writes for `name`. */
-export const tarOutputPath = (name: string, dir: string = tmp): string =>
-  `${dir}/${name}.tar`
-
-export const packTAR = async (
+/** Pack files into a TAR in memory. */
+export const packTarFiles = async (
   files: Omit<FileEntry, 'size'>[],
-  name?: string,
-  dir: string = tmp,
-): Promise<{ bytes: Uint8Array; output: string | null }> => {
+): Promise<Uint8Array> => {
   const entries: TarFileItem[] = []
 
   for (const { path, content } of files) {
-    const chunks = await Array.fromAsync(content)
+    const chunks =
+      content instanceof Uint8Array ? [content] : await Array.fromAsync(content)
 
     let totalLength = 0
     for (const c of chunks) totalLength += c.length
@@ -35,11 +27,5 @@ export const packTAR = async (
     })
   }
 
-  const bytes = createTar(entries) as Uint8Array
-
-  if (!name) return { bytes, output: null }
-
-  const output = tarOutputPath(name, dir)
-  await writeFile(output, bytes)
-  return { bytes, output }
+  return createTar(entries) as Uint8Array
 }

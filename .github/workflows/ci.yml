@@ -18,3 +18,5 @@ jobs:
         run: pnpm build
       - name: lint
         run: pnpm check
+      - name: check core bundle
+        run: pnpm check:core

@@ -1,3 +1,5 @@
+import '../providers/node.js'
+
 import type { Address } from 'ox/Address'
 import { fromEther } from 'ox/Value'
 import { MissingCLIArgsError, UnknownProviderError } from '../errors.js'

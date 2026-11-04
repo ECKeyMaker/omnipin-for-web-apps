@@ -83,7 +83,8 @@
 		"test:report": "mkdir -p coverage && node --experimental-test-module-mocks --import ./test/register.ts --test --experimental-test-coverage --test-coverage-include='src/**' --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=coverage/lcov.info 'test/**/*.test.ts'",
 		"test:e2e": "pnpm build && node --import ./test/register.ts --test 'e2e/**/*.test.ts'",
 		"check:core": "node scripts/check-core.ts",
-		"test:contracts": "cd contracts && forge test"
+		"test:contracts": "cd contracts && forge test",
+		"prepare": "rslib && cp src/worker/schema.sql dist/schema.sql"
 	},
 	"size-limit": [
 		{

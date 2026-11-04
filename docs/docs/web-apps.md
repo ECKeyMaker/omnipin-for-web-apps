@@ -11,6 +11,41 @@ Your frontend holds no provider tokens and no wallet keys.
 3. A Cloudflare Workflow verifies the CAR, then publishes it to storage providers.
 4. If the site has an ENS name, the user's wallet approves the update. The public pool pays the gas when the wallet supports it.
 
+## Install
+
+The package doesn't have to come from npm. Pick whichever suits your app, and pin a commit or version so an update can't change your app without you noticing.
+
+### From a tarball
+
+Build one with `pnpm pack`, then install the file:
+
+```sh
+npm i ./omnipin-web-apps-1.0.0-rc.0.tgz
+```
+
+### From Git with npm
+
+```sh
+npm i github:ECKeyMaker/omnipin-for-web-apps#COMMIT_SHA
+```
+
+The package builds itself during install, and npm prints an `install-scripts` warning about that.
+
+### From Git with pnpm
+
+pnpm won't run a Git dependency's build until you approve that exact commit. Add it to `pnpm-workspace.yaml`, then install:
+
+```yaml
+allowBuilds:
+  'omnipin-web-apps@git+https://github.com/ECKeyMaker/omnipin-for-web-apps.git#COMMIT_SHA': true
+```
+
+```sh
+pnpm add github:ECKeyMaker/omnipin-for-web-apps#COMMIT_SHA
+```
+
+If pnpm prints a different key, copy that one. You'll need a new entry for each commit you update to.
+
 ## Connect your app
 
 You need an app id and secret from the gateway operator. They'll also need your site's origin and the quotas you're requesting.

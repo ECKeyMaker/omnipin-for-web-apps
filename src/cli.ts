@@ -20,7 +20,10 @@ import { isTTY } from './constants.js'
 import { AllProvidersFailedError } from './errors.js'
 import { logger } from './utils/logger.js'
 
-const cli = new CLI({ name: 'omnipin', plugins: isTTY ? [colorPlugin] : [] })
+const cli = new CLI({
+  name: 'omnipin-web-apps',
+  plugins: isTTY ? [colorPlugin] : [],
+})
 
 const onchainOptions = [
   {

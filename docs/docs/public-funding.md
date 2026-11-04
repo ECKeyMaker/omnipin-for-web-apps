@@ -16,8 +16,8 @@ Anyone can donate by sending ETH to the treasury, or by calling `EntryPoint.depo
 ## What isn't automated
 
 - **Paying for storage.** Most providers bill an account, so the operator must convert treasury funds into provider credit. The contracts can't do this.
-- **Renewals.** Storage bills recur. The gateway records `retention_until` on each deployment, but it doesn't renew, unpin or delete anything. Set a retention period the treasury can actually cover.
-- **Content moderation.** Quotas limit how much is stored, not what. Only register apps you trust, and have a process for abuse reports.
+- **Renewals.** Storage bills recur. A daily sweep marks sites past `retention_until` as `expired`, but only the operator can renew them, and each renewal is a commitment the treasury has to cover. Set a retention period it can actually afford.
+- **Content moderation.** Quotas limit how much is stored, not what. Only register apps you trust, and have a process for abuse reports. See [Take a site down](#take-a-site-down).
 
 ## Before mainnet
 
@@ -52,7 +52,6 @@ Start from `examples/cloudflare-gateway`. It needs Workers Paid, because Workers
 wrangler d1 create omnipin-gateway
 wrangler d1 execute omnipin-gateway --file=node_modules/omnipin-web-apps/dist/schema.sql
 wrangler r2 bucket create omnipin-cars
-wrangler secret put MASTER_SECRET
 wrangler deploy
 ```
 
@@ -61,25 +60,72 @@ Configure the bucket:
 - **CORS:** allow `PUT` from every connected app's origin, with the `Content-Type` header.
 - **Lifecycle:** delete objects after a day, which cleans up uploads that never started.
 
-## Register an app
+### Secrets
 
-```sql
-INSERT INTO connected_apps (id, name, origins, daily_bytes, user_daily_deploys)
-VALUES ('your-app', 'Your App', '["https://app.example"]', 1000000000, 5);
+Set each with `wrangler secret put`. None of them belong in a connected app or in `wrangler.jsonc`.
+
+| Secret | Purpose | If it leaks |
+|---|---|---|
+| `MASTER_SECRET` | Derives every app's secret | Anyone can act as any app. Replace it, which invalidates every app at once |
+| `ADMIN_SECRET` | Operator API. The API is off if this is unset | Anyone can register apps, read the audit log and take sites down |
+| `PAYMASTER_SIGNER_KEY` | Approves gas sponsorship | See [Limiting losses](#limiting-losses) |
+| `PINATA_TOKEN` and other provider tokens | Publishing to storage | Revoke it at the provider |
+| `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` | Signing upload URLs | Revoke it in Cloudflare |
+
+Scope the R2 key to the one bucket. Scope any Cloudflare DNSLink token to the one zone.
+
+## Operator API
+
+These routes sit under the gateway's base path, and need `Authorization: Bearer $ADMIN_SECRET`. They're closed to browsers.
+
+### Register an app
+
+```sh
+curl -X POST "$GATEWAY/admin/apps" -H "Authorization: Bearer $ADMIN_SECRET" -d '{
+  "id": "your-app",
+  "name": "Your App",
+  "origins": ["https://app.example"],
+  "dailyBytes": 1000000000,
+  "userDailyDeploys": 5,
+  "dailySponsorships": 20
+}'
 ```
 
-Derive the app's secret with `deriveAppSecret(MASTER_SECRET, 'your-app')`, and send it over a secure channel. To cut an app off, set `active = 0`.
+The response holds the app's secret. It's shown here and on rotation only, so send it over a secure channel.
 
-Changing `MASTER_SECRET` invalidates every app's secret at once, so there's currently no way to rotate a single app's secret. Instead, register the app under a new id.
+| Route (`POST`) | Effect |
+|---|---|
+| `/admin/apps/:id/rotate` | Replaces one app's secret. Its existing sessions stop working |
+| `/admin/apps/:id/suspend` | Stops the app deploying or using gas |
+| `/admin/apps/:id/resume` | Reverses a suspension |
+| `/admin/deployments/:id/renew` | Extends retention by `{ "days": 30 }`, and restores an expired site |
+| `/admin/deployments/:id/remove` | Takes a site down, with a required `{ "reason": "..." }` |
+
+`GET /admin/audit` returns the latest 200 audit entries. Everything that spends from the pool or removes content is recorded.
+
+### Take a site down
+
+`remove` unpins from every provider that holds the site, even if other deployments share its content. Check the response: a provider listed as `unsupported` has no unpin API, so remove it there by hand.
+
+This stops the pool storing the site. It can't remove copies elsewhere, and an ENS name pointing at it keeps pointing there.
+
+## Retention
+
+The cron in the example runs the sweep daily. Sites past retention are marked `expired` and stay pinned, so nothing goes offline by accident. Set `limits.unpinExpired` to unpin them as well.
 
 ## Quotas
 
 | Limit | Set in | Protects against |
 |---|---|---|
 | `limits.globalDailyBytes` | Gateway config | The pool being spent by all apps together |
-| `daily_bytes` | `connected_apps` | One app using the pool |
-| `user_daily_deploys` | `connected_apps` | One user using an app's quota |
+| `limits.dailySponsorships` | Gateway config | Gas spent across all apps in a day |
+| `dailyBytes` | Per app | One app using the pool |
+| `dailySponsorships` | Per app | One app using the gas pool |
+| `userDailyDeploys` | Per app | One user using an app's quota |
 | `limits.sponsorAttempts` | Gateway config | Repeated gas approvals per deployment |
 | `maxCostPerOp` | Paymaster | One expensive operation |
+| `RATE_LIMITER` binding | `wrangler.jsonc` | Request floods, per user and per deployment |
 
-Per-user limits depend on the connected app's logins, so `daily_bytes` is the limit that actually holds if an app is abused or its secret leaks. There is no daily cap on gas across all deployments yet, so the size of the paymaster deposit is the overall gas limit.
+Per-user limits depend on the connected app's logins, so `dailyBytes` and `dailySponsorships` are the limits that hold if an app is abused or its secret leaks.
+
+The gateway enforces these. A leaked `PAYMASTER_SIGNER_KEY` bypasses the gas quotas, leaving only the cost cap and the size of the deposit.

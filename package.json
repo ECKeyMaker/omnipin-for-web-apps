@@ -1,10 +1,10 @@
 {
 	"name": "omnipin-web-apps",
-	"version": "4.0.1",
+	"version": "1.0.0-rc.0",
 	"author": "v1rtl <hi@v1rtl.site>",
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/omnipin/omnipin.git"
+		"url": "git+https://github.com/ECKeyMaker/omnipin-for-web-apps.git"
 	},
 	"devDependencies": {
 		"@account-abstraction/contracts": "0.7.0",
@@ -26,14 +26,10 @@
 		"fflate": "^0.8.3",
 		"forge-std": "github:foundry-rs/forge-std#v1.9.7",
 		"hamt-sharding": "^3.0.8",
-		"interface-blockstore": "^7.0.1",
 		"interface-store": "^8.0.0",
-		"ipfs-unixfs": "^13.0.0",
 		"jsdom": "^30.1.3",
 		"miniflare": "^4.20260730.0",
-		"multiformats": "^14.0.0",
 		"nanotar": "^0.3.0",
-		"ox": "^0.14.8",
 		"prool": "^0.2.4",
 		"react": "^19.3.1",
 		"react-dom": "^19.3.1",
@@ -43,10 +39,16 @@
 		"typescript": "^7.0.2",
 		"varint": "^6.0.0"
 	},
-	"bin": {
-		"omnipin": "dist/cli.js"
+	"dependencies": {
+		"interface-blockstore": "^7.0.1",
+		"ipfs-unixfs": "^13.0.0",
+		"multiformats": "^14.0.0",
+		"ox": "^0.14.8"
 	},
-	"description": "🌸 Self-custodial decentralized deployments",
+	"bin": {
+		"omnipin-web-apps": "dist/cli.js"
+	},
+	"description": "Deploy static sites to IPFS from any web app, with gas and storage paid from a shared public pool",
 	"engineStrict": true,
 	"engines": {
 		"node": ">=22"
@@ -55,12 +57,15 @@
 		"dist",
 		"contracts/src"
 	],
-	"homepage": "https://github.com/omnipin/omnipin",
+	"homepage": "https://github.com/ECKeyMaker/omnipin-for-web-apps",
 	"keywords": [
 		"ipfs",
-		"filecoin",
 		"deploy",
-		"cli"
+		"ens",
+		"web3",
+		"cloudflare-workers",
+		"erc-4337",
+		"react"
 	],
 	"license": "MIT",
 	"packageManager": "pnpm@12.11.2",
@@ -87,7 +92,10 @@
 			"brotli": false
 		},
 		{
-			"path": "dist/index.js",
+			"path": [
+				"dist/*.js",
+				"!dist/cli.js"
+			],
 			"limit": "1MB",
 			"brotli": false
 		}

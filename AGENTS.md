@@ -173,7 +173,8 @@ OMNIPIN_AIOZ_TOKEN=api_key:api_secret
   /providers      # Provider tests
   /utils          # Utility tests
 /contracts          # SponsorPaymaster, tests and deploy script (Foundry)
-/examples           # Connected gateway template
+/e2e                # Tests of the built packages (`pnpm test:e2e`)
+/examples           # Gateway and connected-app templates
 dist/             # Build output
 ```
 

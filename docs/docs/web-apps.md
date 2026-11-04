@@ -48,7 +48,7 @@ import { DeployPanel } from 'omnipin-web-apps/react'
 />
 ```
 
-Style it with the `--omnipin-text`, `--omnipin-surface` and `--omnipin-error` CSS variables, or use `useDeploy()` to build your own interface.
+It accepts a build folder, a `.zip` or dropped files, reviews them before anything uploads, and walks the user through the ENS update. Style it with the `--omnipin-text`, `--omnipin-surface`, `--omnipin-accent` and `--omnipin-error` CSS variables, or use `useDeploy()` to build your own interface.
 
 ### Without React
 
@@ -82,6 +82,40 @@ const { sponsored } = await client.updateEns(deployment.id, { wallet, account })
 
 Once the transaction lands, confirm it with `client.verifyEns(deployment.id)`. The gateway reads the name back from chain, so it doesn't rely on the client's word.
 
+### Through a Safe
+
+Pass `safe` to propose the update instead of sending it. The connected wallet must belong to an owner:
+
+```ts
+const { queueUrl } = await client.updateEns(deployment.id, {
+  wallet,
+  account,
+  safe: '0x...',
+})
+```
+
+This only queues the update. Nothing changes until enough owners approve it, and that gas isn't sponsored. `DeployPanel` takes the same `safe` prop.
+
+## Remove a site
+
+```ts
+await fetch(`${apiBase}/${deployment.id}/remove`, {
+  method: 'POST',
+  headers: { Authorization: `Bearer ${token}` },
+})
+```
+
+Users can remove their own sites. The response lists what happened at each provider:
+
+| Status | Meaning |
+|---|---|
+| `unpinned` | The provider dropped it |
+| `shared` | Kept, because another live deployment has identical content |
+| `unsupported` | The provider has no unpin API, so the operator must remove it |
+| `failed` | The provider refused or was unreachable |
+
+Removal stops the pool storing a site. It can't recall copies other people or nodes already hold.
+
 ## What can be deployed
 
 Only static output works: HTML, CSS, JavaScript and assets, with `index.html` at the root. Server rendering and API routes can't run on IPFS. Client-side routes may need hash routing or a fallback page.
@@ -90,4 +124,10 @@ Deploys are refused if they contain likely secrets such as `.env` files or priva
 
 ## Limits
 
+Requests fail with a `GatewayError` carrying a status code. A `429` means a quota or rate limit was reached, and a `401` means your session expired, so fetch a new token.
+
 A deployment is retained only for the gateway's retention period. Check `retentionUntil` on the deployment.
+
+## Example
+
+`examples/connected-app` is a complete app: a React frontend and a Worker that issues sessions. Its token endpoint refuses everyone until you add your own login check.

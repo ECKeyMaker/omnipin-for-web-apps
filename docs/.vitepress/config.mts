@@ -265,6 +265,10 @@ export default withMermaid({
             link: '/docs/public-funding',
           },
           {
+            text: 'Security model',
+            link: '/docs/security',
+          },
+          {
             text: 'Kubo',
             link: '/docs/kubo',
           },
